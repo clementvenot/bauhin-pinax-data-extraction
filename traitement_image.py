@@ -10,7 +10,7 @@ document = pdfium.PdfDocument(str(pdf_path))
 
 # 300 DPI environ (300 / 72) pour une meilleure lecture OCR.
 image = document[0].render(scale=4.17).to_pil()
-image.show()
+#image.show()
 
 def invert(image):
     # Inversion des couleurs de l'image
@@ -56,6 +56,12 @@ def remove_black_borders(image):
     x, y, w, h = cv2.boundingRect(cnt) 
     crop = image[y:y+h, x:x+w] # Recadrage de l'image pour supprimer les bordures noires
     return crop
+
+def convert_pdf_to_image(pdf_path, page_number=0, scale=4.17):
+    # Fonction pour convertir une page PDF en image PIL
+    document = pdfium.PdfDocument(str(pdf_path))
+    image = document[page_number].render(scale=scale).to_pil()
+    return image
 
 if __name__ == "__main__":
 

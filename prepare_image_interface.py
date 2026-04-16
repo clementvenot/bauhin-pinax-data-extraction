@@ -1,13 +1,19 @@
 import tkinter as tk
-from tkinter import messagebox, Tk, ttk
+from tkinter import filedialog, messagebox, Tk, ttk
 from PIL import Image, ImageTk
 import pypdfium2 as pdfium
-
 from matplotlib import image
 from traitement_image import invert, grayscale, threshold, noise_removal, thick_font, thin_font, remove_black_borders, convert_pdf_to_image
 
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    BaseTk = TkinterDnD.Tk
+    HAS_DND = True
+except ImportError:
+    BaseTk = Tk
+    HAS_DND = False
 
-class ImageProcessingApp(Tk):
+class ImageProcessingApp(BaseTk):
     # ---------------------------------------------------------------------------------
     # ------- Classe principale de l'application GUI pour le traitement d'image -------
     # ---------------------------------------------------------------------------------
@@ -21,7 +27,7 @@ class ImageProcessingApp(Tk):
 
         self.pdf_page = None # Image PIL de la page PDF actuellement affichée
         self.image_page = None # Image Tkinter pour l'affichage de la page PDF
-        self.pdf_path = "/Users/clementvenot/git/bauhin-pinax-data-extraction/Caspari Bauhini Viri Clariss. Pinax Theatri Botanici sive Index in Theophrasti Dioscoridis Plinii et botanicorum qui a seculo scripserunt opera.pdf"
+        self.pdf_path = "" # Chemin du PDF actuellement chargé dans l'application
         
         # Initialisation de la page courante et du nombre total de pages du PDF
         self.current_page = 0
@@ -37,16 +43,16 @@ class ImageProcessingApp(Tk):
 
         # --- Création des conteneurs pour les différentes sections de l'interface ---
         # Le conteneur principal pour l'affichage de l'image PDF
-        image_container = ttk.Frame(self)
-        image_container.grid(row=0, column=0,rowspan=2, sticky="nsew", padx=5, pady=5)
+        image_container = ttk.Frame(self, borderwidth=2, relief="solid")
+        image_container.grid(row=0, column=0,rowspan=2, sticky="nsew")
         image_container.grid_propagate(False) # Empêche de redimensionner en fonction de son contenu
         # Le conteneur pour les boutons d'importation et de modification des fonctionnalités
-        import_img_container = ttk.Frame(self)
-        import_img_container.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        import_img_container = ttk.Frame(self, borderwidth=2, relief="solid")
+        import_img_container.grid(row=0, column=1, sticky="nsew")
         import_img_container.grid_propagate(False)
         # Le conteneur pour les fonctionnalités de modification de l'image
-        features_mod_container = ttk.Frame(self)
-        features_mod_container.grid(row=1, column=1, sticky="nsew", padx=5, pady=5)
+        features_mod_container = ttk.Frame(self, borderwidth=2, relief="solid")
+        features_mod_container.grid(row=1, column=1, sticky="nsew")
         features_mod_container.grid_propagate(False)
 
         # ----------------------------------------------------------------------------
@@ -94,7 +100,113 @@ class ImageProcessingApp(Tk):
         self.image_area.bind("<Configure>", self.resize_pdf_image)
         self.update_navigation_buttons()
 
+        # ----------------------------------------------------------------------------
+        # ------------- Conteneur pour les boutons d'importation du PDF --------------
+        # ----------------------------------------------------------------------------
+
+        # grille pour le conteneur d'importation du PDF
+        # Rows
+        import_img_container.grid_rowconfigure(0, weight=1)
+        import_img_container.grid_rowconfigure(1, weight=1)
+        import_img_container.grid_rowconfigure(2, weight=1)
+        # Columns
+        import_img_container.grid_columnconfigure(0, weight=1)
+        import_img_container.grid_columnconfigure(1, weight=1) 
+
+        # Bouton d'importation du PDF
+        self.import_pdf_button = ttk.Button(import_img_container, text="Importer un PDF", command=self.open_pdf_dialog)
+        self.import_pdf_button.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
+        # Bouton de suppression du PDF
+        self.delete_pdf_button = ttk.Button(import_img_container, text="Supprimer le PDF", command=self.delete_pdf)
+        self.delete_pdf_button.grid(row=2, column=0, sticky="ew", padx=5, pady=5)
+        # Affichage du chemin du PDF actuellement chargé
+        self.pdf_path_label = ttk.Label(
+            import_img_container,
+            text=f"PDF actuel : {self.pdf_path}" if self.pdf_path else "Aucun PDF chargé.",
+            justify="left",
+            anchor="w",
+        )
+        self.pdf_path_label.grid(row=0, column=0,columnspan=2, sticky="ew", padx=5, pady=5) 
+        self.pdf_path_label.bind("<Configure>", lambda event: self.pdf_path_label.configure(wraplength=max(event.width, 1)))
+        # position du label drag and drop 
+        self.drag_drop_label = ttk.Label(import_img_container, text="Ou glissez-déposez un PDF ici", anchor="center", border=2, relief="groove")
+        self.drag_drop_label.grid(row=1, column=1,rowspan=2, sticky="ewsn", padx=5, pady=5)
+        self.drag_drop_label.bind("<Configure>", lambda event: self.drag_drop_label.configure(wraplength=max(event.width, 1)))
+        # Configuration du drag and drop si la dependance est disponible, sinon affichage d'un message d'indisponibilité
+        if HAS_DND:
+            self.drag_drop_label.drop_target_register(DND_FILES)
+            self.drag_drop_label.dnd_bind("<<Drop>>", self.drag_and_drop_pdf)
+        else:
+            self.drag_drop_label.config(text="Glisser-déposer indisponible (installez tkinterdnd2)")
+        self.update_pdf_buttons()
+
+
+
+    # --------------------------------------------------------------------------------
+    # -------------------- Fonctions pour l'importation du PDF -----------------------
+    # --------------------------------------------------------------------------------
+
+    def open_pdf_dialog(self):
+        # --- Fonction pour ouvrir une boîte de dialogue de sélection de fichier PDF et importer le PDF sélectionné ---
+        pdf_path = filedialog.askopenfilename(
+            title="Choisir un PDF",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if pdf_path:
+            self.import_pdf(pdf_path)
+
+    def import_pdf(self, pdfPath):
+        # --- Fonction pour importer un PDF et mettre à jour le chemin du PDF dans l'application -----
+        # (recuperer le chemin, le nombre de pages, la page courante, afficher la page, update les boutons de navigation et d'importation, update les labels)
+        self.pdf_path = pdfPath
+        self.page_count = self.get_pdf_page_count()
+        self.current_page = 0
+        self.go_to_page(self.current_page)
+        self.update_navigation_buttons()
+        if self.pdf_path.lower().endswith(".pdf"):
+            self.pdf_path_label.config(text=f"PDF actuel : {self.pdf_path}")
+        self.update_pdf_buttons()
+        self.page_entry_var.set(str(self.current_page + 1 if self.page_count else 0))
+        self.page_count_label.config(text=f"/ {self.page_count} page{('s' if self.page_count != 1 else '')}")
     
+    def drag_and_drop_pdf(self, event):
+        # --- Fonction pour gérer le drag and drop d'un fichier PDF dans l'application ---
+        if event.data:
+            # Extraction du premier chemin depose (gestion des espaces et multi-fichiers)
+            dropped_items = self.tk.splitlist(event.data)
+            if not dropped_items:
+                return
+            pdf_path = dropped_items[0].strip() # Prendre le premier élément et supprimer les espaces superflus
+            if pdf_path.startswith("file://"): # Gestion du cas où le chemin commence par "file://"
+                pdf_path = pdf_path[7:]
+            if not pdf_path.lower().endswith(".pdf"): # Validation de l'extension du fichier déposé
+                messagebox.showerror("Erreur", "Le fichier déposé doit être un PDF.")
+                return
+            self.import_pdf(pdf_path)  # Importation du PDF
+    
+    def delete_pdf(self):
+        # --- Fonction pour supprimer le PDF actuellement chargé dans l'application ---
+        # (reset des variables liées au PDF, mise à jour de l'affichage, des boutons et des labels, navigation vers la page 0, update du nombre de pages, update des boutons de navigation, update du label de chemin du PDF, update du label de nombre de pages, reset des labels.)
+        self.pdf_path = ""
+        self.page_count = 0
+        self.current_page = 0
+        self.pdf_page = None
+        self.image_page = None
+        self.imagePDF.configure(image="", text="Aucune page PDF à afficher") 
+        self.go_to_page(self.current_page)
+        self.pdf_path_label.config(text='Aucun PDF chargé. Cliquez sur "Importer un PDF" pour commencer.')
+        self.update_pdf_buttons()
+        self.update_navigation_buttons()
+        self.page_entry_var.set(str(self.current_page + 1 if self.page_count else 0))
+        self.page_count_label.config(text=f"/ {self.page_count} page{('s' if self.page_count != 1 else '')}")
+
+    def update_pdf_buttons(self):
+        # --- Active/desactive les boutons lies au PDF selon l'etat de chargement ---
+        delete_state = "normal" if self.pdf_path else "disabled"
+        self.delete_pdf_button.config(state=delete_state)
+
+
+
     # --------------------------------------------------------------------------------
     # ------- Fonctions pour l'affichage et la navigation dans les pages du PDF ------
     # --------------------------------------------------------------------------------
@@ -106,7 +218,7 @@ class ImageProcessingApp(Tk):
         if self.pdf_page is not None:
             self.imagePDF = ttk.Label(image_container) # Création d'un label pour afficher l'image PDF
         else:
-            self.imagePDF = ttk.Label(image_container, text="Pas de PDF disponible")
+            self.imagePDF = ttk.Label(image_container, text="Aucune page PDF à afficher", anchor="center") 
         self.imagePDF.grid(row=0, column=0)
         if self.pdf_page is not None:
             # Redimensionnement de l'image après son affichage pour s'adapter à la taille du conteneur
@@ -133,10 +245,6 @@ class ImageProcessingApp(Tk):
         # Mise à jour de l'image affichée dans le label + suppr text si présent
         self.image_page = ImageTk.PhotoImage(display_image)
         image_pdf.configure(image=self.image_page, text="")
-
-    def import_pdf(self, pdfPath):
-        # --- Fonction pour importer un PDF et mettre à jour le chemin du PDF dans l'application -----
-        self.pdf_path = pdfPath
 
     def get_pdf_image_page(self):
         # --- Fonction pour obtenir l'image PIL de la page PDF courante, avec gestion des erreurs ----

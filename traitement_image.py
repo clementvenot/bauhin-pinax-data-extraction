@@ -50,7 +50,14 @@ def thin_font(image, kernel_size=1, iterations=1):
 
 def remove_black_borders(image):
     # Suppression des bordures noires en trouvant les contours et en recadrant l'image
-    contours, hierarchy = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Conversion en niveaux de gris si necessaire (cv2.findContours ne supporte que CV_8UC1)
+    if len(image.shape) == 3: # Si l'image a 3 canaux (BGR), la convertir en niveaux de gris
+        image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        image_gray = image
+    contours, hierarchy = cv2.findContours(image_gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return image  # Retourner l'image originale si aucun contour trouvé
     cntsSorted = sorted(contours, key=lambda x: cv2.contourArea(x), reverse=True)
     cnt = cntsSorted[0] 
     x, y, w, h = cv2.boundingRect(cnt) 

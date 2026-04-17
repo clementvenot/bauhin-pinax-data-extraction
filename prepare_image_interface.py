@@ -1,10 +1,12 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, Tk, ttk
+import numpy as np
 from PIL import Image, ImageTk
 import pypdfium2 as pdfium
 from matplotlib import image
-from traitement_image import invert, grayscale, threshold, noise_removal, thick_font, thin_font, remove_black_borders, convert_pdf_to_image
+from traitement_image import grayscale, threshold, noise_removal, thick_font, thin_font, remove_black_borders, convert_pdf_to_image
 
+# Gestion du drag and drop avec tkinterdnd2 si disponible, sinon fallback sur Tk classique
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
     BaseTk = TkinterDnD.Tk
@@ -28,6 +30,17 @@ class ImageProcessingApp(BaseTk):
         self.pdf_page = None # Image PIL de la page PDF actuellement affichée
         self.image_page = None # Image Tkinter pour l'affichage de la page PDF
         self.pdf_path = "" # Chemin du PDF actuellement chargé dans l'application
+        self.bw_var = tk.BooleanVar(value=False)
+        self.threshold_var = tk.BooleanVar(value=False)
+        self.threshold_value_var = tk.IntVar(value=128)
+        self.noise_var = tk.BooleanVar(value=False)
+        self.dilate_iterations_var = tk.IntVar(value=0)
+        self.erode_iterations_var = tk.IntVar(value=0)
+        self.thick_var = tk.BooleanVar(value=False)
+        self.thick_value_var = tk.IntVar(value=1)
+        self.thin_var = tk.BooleanVar(value=False)
+        self.thin_value_var = tk.IntVar(value=1)
+        self.remove_borders_var = tk.BooleanVar(value=False)
         
         # Initialisation de la page courante et du nombre total de pages du PDF
         self.current_page = 0
@@ -140,8 +153,251 @@ class ImageProcessingApp(BaseTk):
             self.drag_drop_label.config(text="Glisser-déposer indisponible (installez tkinterdnd2)")
         self.update_pdf_buttons()
 
+        # ----------------------------------------------------------------------------
+        # ------------ Conteneur pour les boutons de traitement d'image --------------
+        # ----------------------------------------------------------------------------
+
+        # --- Configuration de la grille pour le conteneur de fonctionnalités de modification de l'image ---
+        # Rows
+        features_mod_container.grid_rowconfigure(0, weight=1)
+        features_mod_container.grid_rowconfigure(1, weight=1)
+        features_mod_container.grid_rowconfigure(2, weight=1)
+        features_mod_container.grid_rowconfigure(3, weight=1)
+        features_mod_container.grid_rowconfigure(4, weight=1)
+        features_mod_container.grid_rowconfigure(5, weight=1)
+        features_mod_container.grid_rowconfigure(6, weight=1)
+        features_mod_container.grid_rowconfigure(7, weight=1)
+        features_mod_container.grid_rowconfigure(8, weight=2)
+        # Columns
+        features_mod_container.grid_columnconfigure(0, weight=1)
+        features_mod_container.grid_columnconfigure(1, weight=1)
+        features_mod_container.grid_columnconfigure(2, weight=1)
+        features_mod_container.grid_columnconfigure(3, weight=1)
+
+        # --- Création des boutons pour les différentes fonctionnalités de traitement d'image ---
+        # bouton noir et blanc
+        self.bw_button = ttk.Checkbutton(features_mod_container, text="Noir et Blanc", variable=self.bw_var, command=self.toggle_black_and_white)
+        self.bw_button.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+        # bouton de seuillage
+        self.threshold_button = ttk.Checkbutton(features_mod_container, text="Seuillage", variable=self.threshold_var, command=self.toggle_threshold)
+        self.threshold_button.grid(row=1, column=0, sticky="w")
+        self.threshold_label = ttk.Label(features_mod_container, text="Valeur du seuil : ")
+        self.threshold_label.grid(row=2, column=0, sticky="en")
+        # Contrôle du seuil pour le seuillage, initialement désactivé, activé uniquement lorsque le seuillage est activé
+        self.threshold_scale = tk.Scale( 
+            features_mod_container,
+            from_=0,
+            to=255,
+            orient="horizontal",
+            resolution=1,
+            variable=self.threshold_value_var,
+            command=self.on_threshold_change,
+            state="disabled",
+        )
+        self.threshold_scale.grid(row=2, column=1, sticky="enw")
+        self.threshold_button.config(state="disabled")
+        # bouton de reduction du bruit
+        self.noise_removal_button = ttk.Checkbutton(features_mod_container, text="Reduction du bruit", variable=self.noise_var, command=self.toggle_noise_reduction)
+        self.noise_removal_button.grid(row=3, column=0, sticky="w", padx=5, pady=5)
+        # parametre numero 1 pour la reduction du bruit : nombre d'iterations de dilatation
+        self.dilate_iter_label = ttk.Label(features_mod_container, text="Nettoyage etape 1")
+        self.dilate_iter_label.grid(row=4, column=0, sticky="en" , pady=(4, 0))
+        self.dilate_iter_spinbox = tk.Spinbox(
+            features_mod_container,
+            from_=0,
+            to=99,
+            textvariable=self.dilate_iterations_var,
+            width=5,
+            state="disabled",
+            command=self.on_noise_parameter_change,
+        )
+        self.dilate_iter_spinbox.grid(row=4, column=1, sticky="wn")
+        # parametre numero 2 pour la reduction du bruit : nombre d'iterations d'erosion
+        self.erode_iter_label = ttk.Label(features_mod_container, text="Nettoyage etape 2")
+        self.erode_iter_label.grid(row=4, column=2, sticky="en" , pady=(4, 0))
+        self.erode_iter_spinbox = tk.Spinbox(
+            features_mod_container,
+            from_=0,
+            to=99,
+            textvariable=self.erode_iterations_var,
+            width=5,
+            state="disabled",
+            command=self.on_noise_parameter_change,
+        )
+        self.erode_iter_spinbox.grid(row=4, column=3, sticky="wn")
+        # Liens pour mettre à jour l'aperçu lorsque les paramètres de réduction du bruit changent
+        for spinbox in (
+            self.dilate_iter_spinbox,
+            self.erode_iter_spinbox,
+        ):
+            spinbox.bind("<KeyRelease>", self.on_noise_parameter_change) 
+            spinbox.bind("<FocusOut>", self.on_noise_parameter_change)
+
+        # Boutons Thick et Thin (mutuellement exclusifs)
+        self.thick_button = ttk.Checkbutton(features_mod_container, text="Epaissir", variable=self.thick_var, command=self.toggle_thick)
+        self.thick_button.grid(row=5, column=0, sticky="w", padx=5, pady=5)
+        self.thick_spinbox = tk.Spinbox(
+            features_mod_container,
+            from_=1,
+            to=99,
+            textvariable=self.thick_value_var,
+            width=5,
+            state="disabled",
+            command=self.on_thick_thin_parameter_change,
+        )
+        self.thick_spinbox.grid(row=5, column=1, sticky="w", padx=(0, 8), pady=5)
+        self.thick_spinbox.bind("<KeyRelease>", self.on_thick_thin_parameter_change)
+        self.thick_spinbox.bind("<FocusOut>", self.on_thick_thin_parameter_change)
+
+        self.thin_button = ttk.Checkbutton(features_mod_container, text="Affiner", variable=self.thin_var, command=self.toggle_thin)
+        self.thin_button.grid(row=6, column=0, sticky="w", padx=(0, 5), pady=5)
+        self.thin_spinbox = tk.Spinbox(
+            features_mod_container,
+            from_=1,
+            to=99,
+            textvariable=self.thin_value_var,
+            width=5,
+            state="disabled",
+            command=self.on_thick_thin_parameter_change,
+        )
+        self.thin_spinbox.grid(row=6, column=1, sticky="w", padx=(0, 5), pady=5)
+        self.thin_spinbox.bind("<KeyRelease>", self.on_thick_thin_parameter_change)
+        self.thin_spinbox.bind("<FocusOut>", self.on_thick_thin_parameter_change)
+
+        # Bouton pour retirer les bordures noires
+        self.remove_borders_button = ttk.Checkbutton(features_mod_container, text="Retirer les bordures", variable=self.remove_borders_var, command=self.toggle_remove_borders)
+        self.remove_borders_button.grid(row=7, column=0, sticky="w", padx=5, pady=5)
+        # Initialiser l'etat du bouton (desactif au demarrage)
+        self.update_remove_borders_button()
 
 
+        # ----------------------------------------------------------------------------
+        # ----------------------- Telechargement final  ------------------------------
+        # ----------------------------------------------------------------------------
+
+        # Bouton pour telecharger l'image
+        self.download_button = ttk.Button(features_mod_container, text="Telecharger", command=lambda: None)
+        self.download_button.grid(row=8, column=2, columnspan=2, sticky="ew", padx=5, pady=5)
+
+    # ----------------------------------------------------------------------------
+    # -------------------- Fonctions traitement de l'image -----------------------
+    # ----------------------------------------------------------------------------
+
+    def toggle_black_and_white(self):
+        # --- Active ou désactive l'affichage noir et blanc de la page courante ---
+        self.update_threshold_controls()
+        self.refresh_pdf_preview()
+
+    def toggle_threshold(self):
+        # --- Active ou désactive le seuillage et met à jour le contrôle du seuil ---
+        self.update_threshold_controls()
+        self.refresh_pdf_preview()
+
+    def on_threshold_change(self, event=None):
+        # --- Met à jour l'aperçu quand le seuil change ---
+        self.update_remove_borders_button()
+        if self.bw_var.get() and self.threshold_var.get():
+            self.refresh_pdf_preview() 
+
+    def update_threshold_controls(self):
+        # --- Le seuillage est disponible uniquement lorsque Noir et Blanc est activé ---
+        if self.bw_var.get():
+            self.threshold_button.config(state="normal")
+            self.threshold_scale.config(state="normal" if self.threshold_var.get() else "disabled")
+        else:
+            self.threshold_var.set(False)
+            self.threshold_button.config(state="disabled")
+            self.threshold_scale.config(state="disabled")
+        # Mettre a jour le bouton Retirer les bordures
+        self.update_remove_borders_button()
+
+    def update_remove_borders_button(self):
+        # --- Retirer les bordures ne fonctionne que si Noir et Blanc ET Seuillage sont activés ---
+        if self.bw_var.get() and self.threshold_var.get():
+            self.remove_borders_button.config(state="normal")
+        else:
+            self.remove_borders_var.set(False)
+            self.remove_borders_button.config(state="disabled")
+
+    def toggle_noise_reduction(self):
+        # --- Active ou desactive la reduction du bruit et ses parametres ---
+        state = "normal" if self.noise_var.get() else "disabled"
+        self.dilate_iter_spinbox.config(state=state)
+        self.erode_iter_spinbox.config(state=state)
+        self.refresh_pdf_preview()
+
+    def on_noise_parameter_change(self, event=None):
+        # --- Met a jour l'aperçu quand un parametre de reduction du bruit change ---
+        if self.noise_var.get():
+            self.refresh_pdf_preview()
+
+    def toggle_thick(self):
+        # --- Active thick et desactive thin (mutuellement exclus) ---
+        if self.thick_var.get():
+            self.thin_var.set(False)
+            self.thin_spinbox.config(state="disabled")
+            self.thick_spinbox.config(state="normal")
+        else:
+            self.thick_spinbox.config(state="disabled")
+        self.refresh_pdf_preview()
+
+    def toggle_thin(self):
+        # --- Active thin et desactive thick (mutuellement excluss) ---
+        if self.thin_var.get():
+            self.thick_var.set(False)
+            self.thick_spinbox.config(state="disabled")
+            self.thin_spinbox.config(state="normal")
+        else:
+            self.thin_spinbox.config(state="disabled")
+        self.refresh_pdf_preview()
+
+    def on_thick_thin_parameter_change(self, event=None):
+        # --- Met a jour l'aperçu quand un parametre de thick/thin change ---
+        if self.thick_var.get() or self.thin_var.get():
+            self.refresh_pdf_preview()
+
+    def toggle_remove_borders(self):
+        # --- Active ou desactive la suppression des bordures noires ---
+        self.refresh_pdf_preview()
+
+    def refresh_pdf_preview(self):
+        # --- Recharge la page source puis applique les filtres actifs dans le bon ordre ---
+        self.pdf_page = self.get_pdf_image_page()
+        if self.pdf_page is None:
+            self.resize_pdf_image()
+            return
+        if self.bw_var.get():
+            self.pdf_page = grayscale(self.pdf_page)
+        if self.bw_var.get() and self.threshold_var.get():
+            self.pdf_page = threshold(self.pdf_page, int(self.threshold_value_var.get()))
+        if self.noise_var.get(): # Appliquer la réduction du bruit uniquement si l'option est activée
+            denoised = noise_removal(
+                np.array(self.pdf_page),
+                kernel_size_dilatation=2,
+                iterations_dilatation=int(self.dilate_iterations_var.get()),
+                kernel_size_erosion=2,
+                iterations_erosion=int(self.erode_iterations_var.get()),
+            )
+            self.pdf_page = Image.fromarray(denoised)
+        if self.thick_var.get(): # Appliquer l'épaississement du texte uniquement si l'option est activée
+            thickened = thick_font(
+                np.array(self.pdf_page),
+                kernel_size=max(1, int(self.thick_value_var.get())),
+                iterations=1,
+            )
+            self.pdf_page = Image.fromarray(thickened)
+        if self.thin_var.get(): # Appliquer le rétrécissement du texte uniquement si l'option est activée
+            thinned = thin_font(
+                np.array(self.pdf_page),
+                kernel_size=max(1, int(self.thin_value_var.get())),
+                iterations=1,
+            )
+            self.pdf_page = Image.fromarray(thinned)
+        if self.remove_borders_var.get(): # Appliquer la suppression des bordures uniquement si l'option est activée
+            bordered = remove_black_borders(np.array(self.pdf_page))
+            self.pdf_page = Image.fromarray(bordered)
+        self.resize_pdf_image()
+        
     # --------------------------------------------------------------------------------
     # -------------------- Fonctions pour l'importation du PDF -----------------------
     # --------------------------------------------------------------------------------
@@ -205,8 +461,6 @@ class ImageProcessingApp(BaseTk):
         delete_state = "normal" if self.pdf_path else "disabled"
         self.delete_pdf_button.config(state=delete_state)
 
-
-
     # --------------------------------------------------------------------------------
     # ------- Fonctions pour l'affichage et la navigation dans les pages du PDF ------
     # --------------------------------------------------------------------------------
@@ -214,15 +468,15 @@ class ImageProcessingApp(BaseTk):
     def show_pdf_image(self, image_container):
         # ----- Affichage de la page PDF dans le conteneur dédié ---------------------
         # ----- Gestion du cas où la page ne peut pas être chargée -------------------
-        self.pdf_page = self.get_pdf_image_page()
         if self.pdf_page is not None:
             self.imagePDF = ttk.Label(image_container) # Création d'un label pour afficher l'image PDF
         else:
             self.imagePDF = ttk.Label(image_container, text="Aucune page PDF à afficher", anchor="center") 
         self.imagePDF.grid(row=0, column=0)
-        if self.pdf_page is not None:
+        if self.pdf_path:
             # Redimensionnement de l'image après son affichage pour s'adapter à la taille du conteneur
-            self.imagePDF.after_idle(self.resize_pdf_image)
+            # application des filtres actifs dans le bon ordre
+            self.imagePDF.after_idle(self.refresh_pdf_preview) 
         return self.imagePDF
 
     def resize_pdf_image(self, event=None):
@@ -269,8 +523,10 @@ class ImageProcessingApp(BaseTk):
         # --- page_number est un index interne 0-based -----------------------------------------------
         if self.page_count and 0 <= page_number < self.page_count:
             self.current_page = page_number
-            self.pdf_page = self.get_pdf_image_page()
-            self.resize_pdf_image()
+
+            # Recharge la page source puis applique les filtres actifs dans le bon ordre
+            self.refresh_pdf_preview() 
+
             self.page_entry_var.set(str(self.current_page + 1))
             self.update_navigation_buttons()
             return

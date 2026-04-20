@@ -3,14 +3,8 @@ import numpy as np
 import pypdfium2 as pdfium
 from PIL import Image, ImageOps
 import cv2
-
-# Chargement du PDF.
-pdf_path = Path(__file__).with_name("pinax bsb-p46.pdf")
-document = pdfium.PdfDocument(str(pdf_path))
-
-# 300 DPI environ (300 / 72) pour une meilleure lecture OCR.
-image = document[0].render(scale=4.17).to_pil()
-#image.show()
+from io import BytesIO
+from PyPDF2 import PdfReader, PdfWriter
 
 def invert(image):
     # Inversion des couleurs de l'image
@@ -70,8 +64,97 @@ def convert_pdf_to_image(pdf_path, page_number=0, scale=4.17):
     image = document[page_number].render(scale=scale).to_pil()
     return image
 
+def merge_images_to_pdf(image_list, output_path=None, assembly_progress_callback=None):
+    # Fonction pour assembler une liste d'images PIL en un seul PDF.
+    # Retourne les bytes du PDF si output_path est None, sinon ecrit sur disque.
+    if not image_list:
+        return None
+
+    writer = PdfWriter()
+    total_images = len(image_list)
+
+    # Convertir chaque image en PDF et l'ajouter au writer
+    for index, img in enumerate(image_list, start=1):
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        page_buffer = BytesIO()
+        img.save(page_buffer, "PDF", quality=95)
+        page_buffer.seek(0) 
+        reader = PdfReader(page_buffer)
+        writer.add_page(reader.pages[0])
+
+        # Mettre à jour la progression de l'assemblage
+        if assembly_progress_callback:
+            assembly_progress_callback(index, total_images)
+    
+    # Sauvegarder sur disque si un chemin de sortie est fourni
+    if output_path:
+        with open(output_path, "wb") as output_file:
+            writer.write(output_file)
+        return output_path
+
+    # Sauvegarder en mémoire dans un BytesIO
+    pdf_buffer = BytesIO()
+    writer.write(pdf_buffer)
+    pdf_buffer.seek(0)  # Retourner au début du buffer
+    return pdf_buffer.getvalue()  # Retourner les bytes
+
+def pipeline(pdfPath, bw_bool, threshold_bool, threshold_value=None, noise_removal_bool=False, thick_font_bool=False, thin_font_bool=False, remove_black_borders_bool=False, kernel_size_dilatation=1, iterations_dilatation=1, kernel_size_erosion=1, iterations_erosion=1, kernel_size_thick_font=1, iterations_thick_font=1, kernel_size_thin_font=1, iterations_thin_font=1, progress_callback=None, treshhold_value=None, status_callback=None, output_path=None, assembly_progress_callback=None):
+    # Traiter toutes les pages et assembler le PDF en mémoire
+    if threshold_value is None:
+        # Compatibilite avec l'ancien nom de parametre mal orthographie.
+        threshold_value = treshhold_value
+
+    nbpages = len(pdfium.PdfDocument(str(pdfPath)))
+    images_list = []  # Garder les images en mémoire
+
+    # Traiter chaque page du PDF
+    for page in range(nbpages):
+        image = convert_pdf_to_image(pdfPath, page_number=page)
+        if bw_bool:
+            image = grayscale(image)
+        if threshold_bool:
+            image = threshold(image, threshold_value)
+        if noise_removal_bool:
+            image = noise_removal(np.array(image), kernel_size_dilatation, iterations_dilatation, kernel_size_erosion, iterations_erosion)
+            image = Image.fromarray(image)
+        if thick_font_bool:
+            image = thick_font(np.array(image), kernel_size_thick_font, iterations_thick_font)
+            image = Image.fromarray(image)
+        if thin_font_bool:
+            image = thin_font(np.array(image), kernel_size_thin_font, iterations_thin_font)
+            image = Image.fromarray(image)
+        if remove_black_borders_bool:
+            image = remove_black_borders(np.array(image))
+            image = Image.fromarray(image)
+        
+        # Ajouter l'image traitée à la liste (en mémoire)
+        images_list.append(image)
+
+        # Mettre à jour la progression du traitement des pages
+        if progress_callback:
+            progress_callback(page + 1, nbpages)
+
+    # Mettre à jour le statut avant l'assemblage du PDF
+    if status_callback:
+        status_callback("assembly")
+    
+    # Assembler toutes les images en un seul PDF 
+    if images_list:
+        # Mettre à jour le statut avant la sauvegarde du PDF
+        if status_callback:
+            status_callback("saving")
+        # Assembler les images en PDF et retourner les bytes ou sauvegarder sur disque
+        return merge_images_to_pdf(
+            images_list,
+            output_path=output_path,
+            assembly_progress_callback=assembly_progress_callback,
+        )
+    return None
+
 if __name__ == "__main__":
 
+    """
     invert(image).show()
     grayscale(image).show()
     threshold(grayscale(image), 100).show()
@@ -85,4 +168,21 @@ if __name__ == "__main__":
     Image.fromarray(thick_font_image).show()
         
     remove_black_borders_image = remove_black_borders(np.array(threshold_image))
-    Image.fromarray(remove_black_borders_image).show()
+    Image.fromarray(remove_black_borders_image).show()"""
+
+    # Chargement du PDF.
+    pdf_path = Path("/Users/clementvenot/git/bauhin-pinax-data-extraction/Caspari Bauhini Viri Clariss. Pinax Theatri Botanici sive Index in Theophrasti Dioscoridis Plinii et botanicorum qui a seculo scripserunt opera.pdf")
+    if pdf_path.exists():
+        document = pdfium.PdfDocument(str(pdf_path))
+        # 300 DPI environ (300 / 72) pour une meilleure lecture OCR.
+        image = document[0].render(scale=4.17).to_pil()
+    else:
+        image = None
+
+    # Exemple d'utilisation de la pipeline
+    pdf_bytes = pipeline(pdf_path, bw_bool=True, threshold_bool=True, threshold_value=180, noise_removal_bool=True, thick_font_bool=False, thin_font_bool=False, remove_black_borders_bool=True, kernel_size_dilatation=2, iterations_dilatation=2, kernel_size_erosion=1, iterations_erosion=1)
+    
+    # Sauvegarder le PDF traité sur disque
+    if pdf_bytes:
+        with open("render.pdf", "wb") as f:
+            f.write(pdf_bytes)

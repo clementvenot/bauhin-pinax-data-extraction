@@ -1,10 +1,12 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, Tk, ttk
+import threading
+import queue
 import numpy as np
 from PIL import Image, ImageTk
 import pypdfium2 as pdfium
 from matplotlib import image
-from traitement_image import grayscale, threshold, noise_removal, thick_font, thin_font, remove_black_borders, convert_pdf_to_image
+from traitement_image import grayscale, threshold, noise_removal, thick_font, thin_font, remove_black_borders, convert_pdf_to_image, pipeline
 
 # Gestion du drag and drop avec tkinterdnd2 si disponible, sinon fallback sur Tk classique
 try:
@@ -30,6 +32,8 @@ class ImageProcessingApp(BaseTk):
         self.pdf_page = None # Image PIL de la page PDF actuellement affichée
         self.image_page = None # Image Tkinter pour l'affichage de la page PDF
         self.pdf_path = "" # Chemin du PDF actuellement chargé dans l'application
+
+        # ------- Variables pour les options de traitement d'image et le téléchargement -------
         self.bw_var = tk.BooleanVar(value=False)
         self.threshold_var = tk.BooleanVar(value=False)
         self.threshold_value_var = tk.IntVar(value=128)
@@ -41,6 +45,10 @@ class ImageProcessingApp(BaseTk):
         self.thin_var = tk.BooleanVar(value=False)
         self.thin_value_var = tk.IntVar(value=1)
         self.remove_borders_var = tk.BooleanVar(value=False)
+
+        self._download_queue = queue.Queue() # Queue pour communiquer entre le thread de traitement et le thread de l'interface lors du téléchargement
+        self._download_running = False # Indique si un téléchargement est en cours pour éviter les téléchargements simultanés
+        self._download_target_path = ""
         
         # Initialisation de la page courante et du nombre total de pages du PDF
         self.current_page = 0
@@ -168,6 +176,7 @@ class ImageProcessingApp(BaseTk):
         features_mod_container.grid_rowconfigure(6, weight=1)
         features_mod_container.grid_rowconfigure(7, weight=1)
         features_mod_container.grid_rowconfigure(8, weight=2)
+        features_mod_container.grid_rowconfigure(9, weight=1)
         # Columns
         features_mod_container.grid_columnconfigure(0, weight=1)
         features_mod_container.grid_columnconfigure(1, weight=1)
@@ -270,14 +279,17 @@ class ImageProcessingApp(BaseTk):
         # Initialiser l'etat du bouton (desactif au demarrage)
         self.update_remove_borders_button()
 
-
         # ----------------------------------------------------------------------------
         # ----------------------- Telechargement final  ------------------------------
         # ----------------------------------------------------------------------------
 
         # Bouton pour telecharger l'image
-        self.download_button = ttk.Button(features_mod_container, text="Telecharger", command=lambda: None)
-        self.download_button.grid(row=8, column=2, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.download_button = ttk.Button(features_mod_container, text="Telecharger", command=self.download_pdf)
+        self.download_button.grid(row=9, column=2, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.download_progress = ttk.Progressbar(features_mod_container, orient="horizontal", mode="determinate", maximum=100)
+        self.download_progress.grid(row=9, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+        self.download_status_label = ttk.Label(features_mod_container, text="")
+        self.download_status_label.grid(row=8, column=0, columnspan=4, sticky="wes", padx=5, pady=5)
 
     # ----------------------------------------------------------------------------
     # -------------------- Fonctions traitement de l'image -----------------------
@@ -553,6 +565,142 @@ class ImageProcessingApp(BaseTk):
             return
         # Conversion numero utilisateur (1-based) -> index interne (0-based)
         self.go_to_page(page_number - 1)
+
+    # --------------------------------------------------------------------------------
+    # ---------------- Fonctions de téléchargement du résultat du pdf  ---------------
+    # --------------------------------------------------------------------------------
+
+    def download_pdf(self):
+        # --- Fonction pour télécharger le PDF traité avec tous les paramètres choisis ---
+
+        # Vérification qu'un PDF est chargé ou qu'aucun telechargement n'est en cours avant de lancer le téléchargement
+        if not self.pdf_path or self._download_running:
+            return
+
+        # Demander le chemin de sortie avant de lancer le pipeline.
+        file_path = filedialog.asksaveasfilename(
+            title="Sauvegarder le PDF traité",
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        # Si l'utilisateur annule la boîte de dialogue, on ne fait rien
+        if not file_path:
+            return
+        
+        # Lancer le pipeline de traitement du PDF dans un thread séparé pour éviter de bloquer l'interface utilisateur, et utiliser une queue pour communiquer les progrès et le résultat entre le thread de traitement et le thread de l'interface.
+        self._download_target_path = file_path
+        self._download_running = True
+        self.download_button.config(state="disabled")
+        self.download_progress.stop()
+        self.download_progress.configure(mode="determinate", value=0)
+        self.download_status_label.config(text="Traitement en cours: 0%")
+
+        # Lancer le pipeline de traitement du PDF dans un thread séparé pour éviter de bloquer l'interface utilisateur, et utiliser une queue pour communiquer les progrès et le résultat entre le thread de traitement et le thread de l'interface.
+        worker = threading.Thread(target=self._process_pdf_worker, daemon=True) #
+        worker.start()
+        self.after(100, self._poll_download_queue)
+
+    def _process_pdf_worker(self):
+        # Le pipeline tourne en arriere-plan pour eviter de bloquer le thread UI.
+        try:
+            saved_result = pipeline(
+                pdfPath=self.pdf_path,
+                bw_bool=self.bw_var.get(),
+                threshold_bool=self.threshold_var.get(),
+                threshold_value=int(self.threshold_value_var.get()),
+                noise_removal_bool=self.noise_var.get(),
+                thick_font_bool=self.thick_var.get(),
+                thin_font_bool=self.thin_var.get(),
+                remove_black_borders_bool=self.remove_borders_var.get(),
+                kernel_size_dilatation=2,
+                iterations_dilatation=int(self.dilate_iterations_var.get()),
+                kernel_size_erosion=2,
+                iterations_erosion=int(self.erode_iterations_var.get()),
+                kernel_size_thick_font=max(1, int(self.thick_value_var.get())),
+                iterations_thick_font=1,
+                kernel_size_thin_font=max(1, int(self.thin_value_var.get())),
+                iterations_thin_font=1,
+                progress_callback=lambda current, total: self._download_queue.put(("progress", current, total)),
+                assembly_progress_callback=lambda current, total: self._download_queue.put(("assembly_progress", current, total)),
+                status_callback=lambda status: self._download_queue.put(("status", status)),
+                output_path=self._download_target_path,
+            )
+            self._download_queue.put(("done", saved_result))
+        except Exception as e:
+            self._download_queue.put(("error", str(e)))
+
+    def _poll_download_queue(self): 
+        # Cette fonction est appelée périodiquement pour vérifier les messages de progrès et de statut du thread de traitement du PDF, et mettre à jour l'interface utilisateur en conséquence. Elle gère également la fin du processus de téléchargement, que ce soit en cas de succès ou d'erreur.
+        try:
+            while True:
+                # Récupérer tous les messages disponibles dans la queue sans bloquer, et mettre à jour l'interface utilisateur en fonction du type de message (progrès, statut, fin, erreur).
+                message = self._download_queue.get_nowait()
+                event = message[0]
+                if event == "progress": # message de progrès de traitement du PDF
+                    _, current, total = message
+                    percent = int((current / total) * 85) if total else 0
+                    self.download_progress.configure(mode="determinate")
+                    self.download_progress.configure(value=percent)
+                    self.download_status_label.config(text=f"Traitement en cours: {percent}% ({current}/{total})")
+                elif event == "assembly_progress": # message de progrès d'assemblage et de sauvegarde du PDF
+                    _, current, total = message
+                    percent = 85 + (int((current / total) * 15) if total else 0)
+                    self.download_progress.configure(mode="determinate")
+                    self.download_progress.configure(value=percent)
+                    self.download_status_label.config(text=f"Assemblage en cours: {percent}% ({current}/{total})")
+                elif event == "status": # message de changement de statut du processus (traitement, assemblage, sauvegarde)
+                    _, status = message
+                    if status == "assembly":
+                        self.download_status_label.config(text="Assemblage et sauvegarde du PDF en cours...")
+                    elif status == "saving":
+                        self.download_status_label.config(text="Sauvegarde du PDF en cours...")
+                elif event == "done": # message de fin du processus de téléchargement, avec le résultat du traitement (chemin du PDF sauvegardé ou None en cas d'erreur de traitement)
+                    _, saved_result = message
+                    self._finish_download(saved_result)
+                    return
+                elif event == "error": # message de fin du processus de téléchargement en cas d'erreur, avec le message d'erreur
+                    _, err = message
+                    self._finish_download_error(err)
+                    return
+        except queue.Empty:
+            pass
+
+        if self._download_running:
+            self.after(100, self._poll_download_queue)
+
+    def _finish_download(self, saved_result):
+        # Processus de fin : mise à jour de l'interface utilisateur, affichage d'un message de succès ou d'erreur selon le résultat du téléchargement, et réinitialisation des variables liées au téléchargement.
+        self._download_running = False
+        self.download_button.config(state="normal")
+        self.download_progress.stop()
+
+        if not saved_result:
+            self.download_status_label.config(text="")
+            self._download_target_path = ""
+            messagebox.showerror("Erreur", "Erreur lors du traitement du PDF.")
+            return
+
+        self.download_progress.configure(mode="determinate", value=100)
+        self.download_status_label.config(text="Téléchargement terminé")
+        self.update_idletasks()
+        self.after(250, lambda: self._show_download_success())
+
+    def _show_download_success(self):
+        messagebox.showinfo("Succès", f"PDF sauvegardé avec succès:\n{self._download_target_path}")
+
+        self.download_progress.configure(mode="determinate", value=0) # Reset de la barre de progression
+        self.download_status_label.config(text="")
+        self._download_target_path = ""
+
+    def _finish_download_error(self, err):
+        # Processus de fin en cas d'erreur : mise à jour de l'interface utilisateur, affichage d'un message d'erreur, et réinitialisation des variables liées au téléchargement.
+        self._download_running = False
+        self.download_button.config(state="normal")
+        self.download_progress.stop()
+        self.download_progress.configure(mode="determinate", value=0)
+        self.download_status_label.config(text="")
+        self._download_target_path = ""
+        messagebox.showerror("Erreur", f"Une erreur s'est produite:\n{err}")
 
 window = ImageProcessingApp()
 window.mainloop()

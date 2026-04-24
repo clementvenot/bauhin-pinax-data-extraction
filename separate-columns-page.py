@@ -5,7 +5,7 @@ import numpy as np
 # =========================
 # Chargement PDF
 # =========================
-pdfPath = "pinax bsb-p71.pdf"
+pdfPath = "pinax bsb-p49.pdf"
 document = pdfium.PdfDocument(pdfPath)
 
 image = document[0].render(scale=4.17).to_pil()
@@ -150,5 +150,5 @@ def draw_separator_overlay(image_bgr, color=(0, 0, 255), thickness=3):
 
 overlay, detection_ok, angle = draw_separator_overlay(image_bgr)
 
-cv2.imwrite("page39_overlay_line.png", overlay)
+cv2.imwrite("separate-columns.png", overlay)
 print(f"Ligne détectée: {detection_ok} | angle (si détectée): {angle:+.3f} deg")

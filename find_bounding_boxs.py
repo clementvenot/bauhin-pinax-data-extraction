@@ -7,7 +7,7 @@ import pypdfium2 as pdfium
 # CONFIG
 # ============================================================
 
-pdfPath = "pinax-bsb-p39.pdf"
+pdfPath = "pinax bsb-p65.pdf"
 PAGE_INDEX = 0           # 0 = première page
 RENDER_SCALE = 4.17      # ajuste la résolution de rendu
 
@@ -15,7 +15,7 @@ RENDER_SCALE = 4.17      # ajuste la résolution de rendu
 GAUSSIAN_BLUR_KSIZE = (111, 111)
 
 # Regroupement / fusion
-MERGE_VERTICAL_GAP = 12   # fusion si petites séparations verticales entre segments
+MERGE_VERTICAL_GAP = 500   # fusion si petites séparations verticales entre segments
 
 # Debug outputs
 OUT_TITLES = "page_titles.png"
@@ -27,7 +27,7 @@ OUT_LINES  = "debug_line_boxes.png"
 # UTILS
 # ============================================================
 
-def merge_boxes_by_vertical_gap(boxes, max_gap=12):
+def merge_boxes_by_vertical_gap(boxes, max_gap=50):
     """
     Fusionne des rectangles (x,y,w,h) s'ils sont proches verticalement.
     Utile quand un titre est sur 2 lignes (ou fragments superposés).

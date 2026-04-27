@@ -7,7 +7,7 @@ import pypdfium2 as pdfium
 # CONFIG
 # ============================================================
 
-pdfPath = "pinax bsb-p65.pdf"
+pdfPath = "pinax-bsb-p39.pdf"
 PAGE_INDEX = 0           # 0 = première page
 RENDER_SCALE = 4.17      # ajuste la résolution de rendu
 

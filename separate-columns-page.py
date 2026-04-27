@@ -5,7 +5,7 @@ import numpy as np
 # =========================
 # Chargement PDF
 # =========================
-pdfPath = "pinax bsb-p49.pdf"
+pdfPath = "pinax bsb-p46.pdf"
 document = pdfium.PdfDocument(pdfPath)
 
 image = document[0].render(scale=4.17).to_pil()
@@ -15,84 +15,61 @@ image_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 # Détection ligne centrale
 # =========================
 
-def detect_center_separator_line(image_bgr, center_strip_ratio=0.24, max_abs_angle_deg=8.0):
+def detect_center_separator_line(image_bgr, max_abs_angle_deg=6.0):
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
-    strip_half = max(25, int((w * center_strip_ratio) / 2.0))
-    x0 = max(0, (w // 2) - strip_half)
-    x1 = min(w, (w // 2) + strip_half)
-
-    # Mettre en évidence les encres sombres verticales autour du centre
-    inv_strip = 255 - gray[:, x0:x1]
-    binary = cv2.threshold(inv_strip, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-
-    vertical_kernel_h = max(80, h // 30)
-    vertical = cv2.morphologyEx(
-        binary,
-        cv2.MORPH_OPEN,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (1, vertical_kernel_h)),
+    # 1) binarisation (encre noire uniquement)
+    bw = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        15,
     )
-    vertical = cv2.dilate(vertical, np.ones((3, 3), np.uint8), iterations=1)
 
-    col_strength = np.sum(vertical > 0, axis=0).astype(np.float32)
-    if col_strength.size == 0:
+    # 2) ne garder que la zone centrale (évite marges & décor)
+    center_margin = int(0.25 * w)
+    mask = np.zeros_like(bw)
+    mask[:, center_margin:w - center_margin] = 255
+    bw &= mask
+
+    # 3) morphologie pour lignes verticales fines
+    kernel_vert = cv2.getStructuringElement(
+        cv2.MORPH_RECT, (1, max(40, h // 25))
+    )
+    vertical = cv2.morphologyEx(bw, cv2.MORPH_OPEN, kernel_vert)
+
+    # Nettoyage léger
+    vertical = cv2.morphologyEx(
+        vertical, cv2.MORPH_DILATE, np.ones((3, 3), np.uint8)
+    )
+
+    # 4) récupérer tous les pixels de la ligne
+    ys, xs = np.where(vertical > 0)
+    if len(xs) < 500:
         return None
 
-    seed_local_x = int(np.argmax(col_strength))
-    seed_strength = float(col_strength[seed_local_x])
-    if seed_strength < max(20.0, 0.02 * h):
+    # 5) ajustement robuste (x = a*y + b)
+    ys = ys.astype(np.float32)
+    xs = xs.astype(np.float32)
+    a, b = np.polyfit(ys, xs, 1)
+
+    angle = np.degrees(np.arctan(a))
+    if abs(angle) > max_abs_angle_deg:
         return None
 
-    band_h = max(120, h // 70)
-    search_radius = max(30, (x1 - x0) // 20)
-    min_peak_per_band = max(10, int(0.14 * band_h))
-
-    points = []
-    local_x = seed_local_x
-
-    for y in range(0, h - band_h + 1, band_h):
-        band = np.sum(vertical[y:y + band_h, :] > 0, axis=0)
-
-        start = max(0, local_x - search_radius)
-        end = min(vertical.shape[1], local_x + search_radius + 1)
-        if end <= start:
-            continue
-
-        local_band = band[start:end]
-        candidate_local_x = int(start + np.argmax(local_band))
-        peak = int(band[candidate_local_x])
-
-        if peak < min_peak_per_band:
-            continue
-
-        local_x = candidate_local_x
-        points.append((float(x0 + local_x), float(y + (band_h / 2.0))))
-
-    if len(points) < 6:
-        return None
-
-    ys = np.array([p[1] for p in points], dtype=np.float32)
-    xs = np.array([p[0] for p in points], dtype=np.float32)
-    slope_dx_dy, intercept = np.polyfit(ys, xs, 1)
-    angle_from_vertical_deg = float(np.degrees(np.arctan(slope_dx_dy)))
-
-    if abs(angle_from_vertical_deg) > max_abs_angle_deg:
-        return None
-
-    x_top = float((slope_dx_dy * 0.0) + intercept)
-    x_bottom = float((slope_dx_dy * float(h - 1)) + intercept)
-
-    x_top = float(np.clip(x_top, 0, w - 1))
-    x_bottom = float(np.clip(x_bottom, 0, w - 1))
+    x_top = a * 0 + b
+    x_bottom = a * (h - 1) + b
 
     return {
-        "x1": x_top,
+        "x1": float(x_top),
         "y1": 0.0,
-        "x2": x_bottom,
+        "x2": float(x_bottom),
         "y2": float(h - 1),
-        "angle_from_vertical_deg": angle_from_vertical_deg,
-        "points_count": len(points),
+        "angle_from_vertical_deg": float(angle),
+        "points_count": int(len(xs)),
     }
 
 

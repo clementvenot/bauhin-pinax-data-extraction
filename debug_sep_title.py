@@ -11,7 +11,7 @@ from detect_titles import get_cross_column_titles_from_pdf
 # CONFIG
 # ============================================================
 
-PDF_PATH = "pinax-bsb-p71.pdf"
+PDF_PATH = "pinax bsb-p68.pdf"
 PAGE_INDEX = 0
 RENDER_SCALE = 4.17
 OUT_IMAGE = "title_and_separator.png"

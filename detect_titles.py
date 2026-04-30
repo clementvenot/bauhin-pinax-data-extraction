@@ -157,9 +157,53 @@ def get_cross_column_titles_from_pdf(
     return len(boxes), boxes
 
 
-count, boxes = get_cross_column_titles_from_pdf("pinax-bsb-p39.pdf")
+count, boxes = get_cross_column_titles_from_pdf("pinax-bsb-p41.pdf")
 
 if __name__ == "__main__":
+    pdf_path = "pinax-bsb-p41.pdf"
+    page_index = 0
+    render_scale = 4.17
+
+    # ==== Détection ====
+    count, boxes = get_cross_column_titles_from_pdf(
+        pdf_path,
+        page_index=page_index,
+        render_scale=render_scale
+    )
+
     print(f"Found {count} title(s):")
     for i, (x, y, w, h) in enumerate(boxes):
         print(f"  Title {i+1}: x={x}, y={y}, w={w}, h={h}")
+
+    # ==== Rendu de la page ====
+    document = pdfium.PdfDocument(pdf_path)
+    pil_img = document[page_index].render(scale=render_scale).to_pil()
+
+    image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    # ==== Dessin des rectangles ====
+    for i, (x, y, w, h) in enumerate(boxes):
+        cv2.rectangle(
+            image,
+            (x, y),
+            (x + w, y + h),
+            (0, 0, 255),  # rouge
+            3
+        )
+
+        # Optionnel : numéro du titre
+        cv2.putText(
+            image,
+            f"T{i+1}",
+            (x, max(0, y - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 0, 255),
+            2
+        )
+
+    # ==== Sauvegarde ====
+    output_path = "page_avec_titres_detectes.png"
+    cv2.imwrite(output_path, image)
+
+    print(f"Image sauvegardée : {output_path}")

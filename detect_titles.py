@@ -17,10 +17,12 @@ def merge_boxes_by_vertical_gap(boxes, max_gap=500):
 
         last = merged[-1]
         if y <= last[3] + max_gap:
-            last[0] = min(last[0], x)
-            last[1] = min(last[1], y)
-            last[2] = max(last[2], x2)
-            last[3] = max(last[3], y2)
+            last[:] = [
+                min(last[0], x),
+                min(last[1], y),
+                max(last[2], x2),
+                max(last[3], y2)
+            ]
         else:
             merged.append([x, y, x2, y2])
 
@@ -41,24 +43,19 @@ def group_boxes_by_text_line(boxes, y_gap=12, min_y_overlap=0.35):
             continue
 
         lx1, ly1, lx2, ly2 = lines[-1]
-
         inter = max(0, min(y2, ly2) - max(y1, ly1))
         hmin = max(1, min(y2 - y1, ly2 - ly1))
-        overlap_ratio = inter / hmin
+        overlap = inter / hmin
 
-        same_line = (overlap_ratio >= min_y_overlap) or (y1 <= ly2 + y_gap)
-
-        if same_line:
+        if overlap >= min_y_overlap or y1 <= ly2 + y_gap:
             lines[-1] = [
-                min(lx1, x1),
-                min(ly1, y1),
-                max(lx2, x2),
-                max(ly2, y2)
+                min(lx1, x1), min(ly1, y1),
+                max(lx2, x2), max(ly2, y2)
             ]
         else:
             lines.append([x1, y1, x2, y2])
 
-    return [(x1, y1, x2 - x1, y2 - y1) for (x1, y1, x2, y2) in lines]
+    return [(x1, y1, x2 - x1, y2 - y1) for x1, y1, x2, y2 in lines]
 
 
 # ============================================================
@@ -69,22 +66,24 @@ def detect_cross_column_titles(mask):
     h, w = mask.shape
     center_x = w // 2
 
-    close_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (max(25, w // 35), 3)
+    merged = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(
+            cv2.MORPH_RECT, (max(25, w // 35), 3)
+        ),
+        iterations=3
     )
-    merged = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel, iterations=3)
-
-    dilate_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (max(35, w // 28), 5)
+    merged = cv2.dilate(
+        merged,
+        cv2.getStructuringElement(
+            cv2.MORPH_RECT, (max(35, w // 28), 5)
+        ),
+        iterations=2
     )
-    merged = cv2.dilate(merged, dilate_kernel, iterations=2)
 
     contours, _ = cv2.findContours(
-        merged,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
+        merged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
     min_h = max(8, int(0.006 * h))
@@ -92,8 +91,8 @@ def detect_cross_column_titles(mask):
     min_piece_w = max(30, int(0.02 * w))
     min_title_w = max(120, int(0.18 * w))
 
-    gutter_band = max(20, int(0.02 * w))
-    center_tol  = max(90, int(0.22 * w))
+    gutter = max(20, int(0.02 * w))
+    center_tol = max(90, int(0.22 * w))
 
     pieces = []
     for c in contours:
@@ -104,32 +103,24 @@ def detect_cross_column_titles(mask):
             continue
         pieces.append((x, y, bw, bh))
 
-    line_boxes = group_boxes_by_text_line(pieces)
+    lines = group_boxes_by_text_line(pieces)
 
     titles = []
-    for x, y, bw, bh in line_boxes:
+    for x, y, bw, bh in lines:
         if bw < min_title_w:
             continue
 
         crosses = not (
-            (x + bw) < center_x - gutter_band or
-            x > center_x + gutter_band
+            (x + bw) < center_x - gutter or
+            x > center_x + gutter
         )
+        centered = abs((x + bw / 2) - center_x) < center_tol
 
-        is_centered = abs((x + bw / 2) - center_x) < center_tol
-
-        if crosses or is_centered:
-            pad_x = int(0.01 * w)
-            pad_y = int(0.002 * h)
-
-            x1 = max(0, x - pad_x)
-            y1 = max(0, y - pad_y)
-            x2 = min(w - 1, x + bw + pad_x)
-            y2 = min(h - 1, y + bh + pad_y)
-
-            titles.append((x1, y1, x2 - x1, y2 - y1))
+        if crosses or centered:
+            titles.append((x, y, bw, bh))
 
     return merge_boxes_by_vertical_gap(titles)
+
 
 
 # ============================================================

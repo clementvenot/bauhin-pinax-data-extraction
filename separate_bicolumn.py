@@ -4,7 +4,7 @@ import numpy as np
 # =========================
 # Chargement image PNG
 # =========================
-imagePath = "roi_0.png"   # ← image PNG
+imagePath = "roi_4.png"   # ← image PNG
 image_bgr = cv2.imread(imagePath)
 
 if image_bgr is None:
@@ -31,6 +31,7 @@ cnts = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 cnts = cnts[0] if len(cnts) == 2 else cnts[1]
 cnts = sorted(cnts, key=lambda x: cv2.boundingRect(x)[0])
 
+
 img_h, img_w = image_bgr.shape[:2]
 
 # Zone centrale 10 %
@@ -40,10 +41,11 @@ center_end = center_start + center_zone_width
 
 candidates = []
 min_total_height = img_h * 0.5
-x_tolerance = 30  # tolérance pour considérer "même verticale"
+x_tolerance = 30  # tolérance pour considérer "même verticale" 
 
 for c in cnts:
     x, y, w, h = cv2.boundingRect(c)
+    
     rect_center_x = x + w // 2
 
     if (w < 200
@@ -70,18 +72,61 @@ for rect in candidates:
     if not placed:
         groups.append([rect])
 
+
+detected_lines = []
+
 for group in groups:
     total_height = sum(r[3] for r in group)
 
     if total_height >= min_total_height:
-        for (x, y, w, h) in group:
-            cv2.rectangle(
-                image_bgr,
-                (x, y),
-                (x + w, y + h),
-                (0, 255, 0),
-                20
-            )
+
+        # ---- Calcul X stable ----
+        xs = [r[0] for r in group]
+        ws = [r[2] for r in group]
+
+        x_center = int(np.median(xs))
+        w_mean = int(np.mean(ws))
+
+        x1 = x_center
+        x2 = x_center + w_mean
+
+        # ---- Prolongation verticale ----
+        y1 = 0
+        y2 = img_h
+
+        # ---- Dessin ----
+        cv2.rectangle(
+            image_bgr,
+            (x1, y1),
+            (x2, y2),
+            (0, 255, 0),
+            20
+        )
+
+        # ---- Stockage coordonnées ----
+        detected_lines.append((x1, y1, x2, y2))
+
+detected_lines.sort(key=lambda l: abs((l[0]+l[2])//2 - img_w//2))
+try :
+    print(len(detected_lines))
+    x1, y1, x2, y2 = detected_lines[0]
+except IndexError:
+    print("Aucune ligne détectée")
+
+rois = []
+
+for (x1, y1, x2, y2) in detected_lines:
+    # --- ROI gauche ---
+    roi_left = image_bgr[:, 0:x1]
+
+    # --- ROI droite ---
+    roi_right = image_bgr[:, x2:img_w]
+
+    rois.append((roi_left, roi_right))
+
+    # Sauvegarde (optionnelle)
+    cv2.imwrite("roi_left.png", roi_left)
+    cv2.imwrite("roi_right.png", roi_right)
 
 # show 10% central zone
 cv2.rectangle(image_bgr, (center_start, 0), (center_end, img_h), (255, 0, 0), 5)

@@ -144,8 +144,14 @@ def get_cross_column_titles_from_pdf(
         cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )[1]
 
+    h_img, w_img = mask.shape
+
     boxes = detect_cross_column_titles(mask)
-    return len(boxes), boxes
+
+    # Étendre chaque box à toute la largeur de la page
+    full_width_boxes = [(0, y, w_img, h) for (x, y, w, h) in boxes]
+    
+    return len(full_width_boxes), full_width_boxes
 
 
 count, boxes = get_cross_column_titles_from_pdf("pinax-bsb-p41.pdf")

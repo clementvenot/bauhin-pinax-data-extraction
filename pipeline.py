@@ -37,6 +37,8 @@ def build_block_mask(image_bgr):
 
 def has_center_black_vertical_line(image_bgr, i=0):
     
+    cv2.imwrite(f"aroi_{i}.png", image_bgr)
+
 
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (1, 111), 0)
@@ -49,7 +51,6 @@ def has_center_black_vertical_line(image_bgr, i=0):
 
     dilated = cv2.dilate(tresh, kernal, iterations=1)
 
-    cv2.imwrite(f"roi_{i}.png", dilated)
 
     cnts = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = cnts[0] if len(cnts) == 2 else cnts[1]
@@ -461,11 +462,49 @@ def pipeline(pdf_path, page_index=0, render_scale=4.17):
     }
 
 if __name__ == "__main__":
-    
-    reslt = pipeline(
-        pdf_path="ert.pdf",
-        page_index=0,
+
+    pdf_path = "ert.pdf"
+    page_index = 476  
+
+    reslt = pipeline(pdf_path="ert.pdf",page_index=page_index,
         render_scale=4.17
     )
 
-    # affichage résultat
+    doc = pdfium.PdfDocument(pdf_path)
+    pil_img = doc[page_index].render(scale=4.17).to_pil()
+    image_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    # afficher résultats
+    for title in reslt["titles"]:
+        x, y, w, h = title["x"], title["y"], title["w"], title["h"]
+        cv2.rectangle(
+            image_bgr,
+            (x, y),
+            (x + w, y + h),
+            (255, 0, 0),
+            3
+        )
+    for block in reslt["bicolumn_text"]:
+        x, y, w, h = block["x"], block["y"], block["w"], block["h"]
+        cv2.rectangle(
+            image_bgr,
+            (x, y),
+            (x + w, y + h),
+            (0, 255, 0),
+            3
+        )
+    for block in reslt["italic_text"]:
+        x, y, w, h = block["x"], block["y"], block["w"], block["h"]
+        cv2.rectangle(
+            image_bgr,
+            (x, y),
+            (x + w, y + h),
+            (0, 0, 255),
+            3
+        )
+    cv2.imwrite("debug_pipeline.png", image_bgr)
+
+
+
+    
+

@@ -14,6 +14,8 @@ def build_title_mask(image_bgr):
         blur, 0, 255,
         cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )[1]
+
+    cv2.imwrite("debug_title_mask.png", mask)
     return mask
 
 def build_block_mask(image_bgr):
@@ -28,80 +30,111 @@ def build_block_mask(image_bgr):
     # suppression marges
     mask[:200, :] = mask[-200:, :] = 0
     mask[:, :200] = mask[:, -200:] = 0
-
     return mask
 
+def build_bicolumn_mask(image_bgr):
+    """Mask pour les colonnes bi-ou tri-vides"""
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (1, 1), 0)
+    thresh = cv2.threshold(
+        blur, 0, 255,
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )[1]
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+    dilated = cv2.dilate(thresh, kernel, iterations=1)
+    invert = cv2.bitwise_not(dilated)
+    erode = cv2.erode(invert, kernel, iterations=10)
+    mask = cv2.bitwise_not(erode)
+    return mask
+    
 # ============================================================
 # DÉTECTION TRAIT NOIR VERTICAL CENTRÉ (BLOCS)
 # ============================================================
 
-def has_center_black_vertical_line(image_bgr, i=0):
+def has_center_black_vertical_line(image_bgr):
     
-    cv2.imwrite(f"roi_{i}.png", image_bgr)
+    # =========================
+    # Prétraitement
+    # =========================
+    cv2.imwrite("debug_block_mask.png",image_bgr)
+    mask = build_bicolumn_mask(image_bgr)
 
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (1, 111), 0)
-    tresh = cv2.threshold(
-        blur, 0, 255,
-        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-    )[1]
-
-    kernal = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 113))
-
-    dilated = cv2.dilate(tresh, kernal, iterations=1)
-
-    #cv2.imwrite("123.png", dilated)
-
-    cnts = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # =========================
+    # Contours
+    # =========================
+    cnts = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = cnts[0] if len(cnts) == 2 else cnts[1]
     cnts = sorted(cnts, key=lambda x: cv2.boundingRect(x)[0])
 
-
     img_h, img_w = image_bgr.shape[:2]
 
-    # Zone centrale 25 %
+    # =========================
+    # Zone centrale (25 %)
+    # =========================
     center_zone_width = int(img_w * 0.25)
     center_start = (img_w - center_zone_width) // 2
     center_end = center_start + center_zone_width
 
-
-    candidates = []
-    min_total_height = img_h * 0.5
-    x_tolerance = 30  # tolérance pour considérer "même verticale"
-
+    # =========================
+    # Filtrage des rectangles
+    # =========================
+    valid_rects = []
 
     for c in cnts:
         x, y, w, h = cv2.boundingRect(c)
-        rect_center_x = x + w // 2
+        cx = x + w // 2
 
-        if (w < 200
-            and h > img_h * 0.15
-            and center_start <= rect_center_x <= center_end
-        ):
-            candidates.append((x, y, w, h))
+        if img_h > 1300:
+            condition = (
+                w < img_w * 0.05 and
+                h > img_h * 0.1 and
+                w <= h / 2 and
+                center_start <= cx <= center_end 
+            )
+        else:
+            condition = (
+                w < img_w * 0.05 and
+                h > img_h * 0.3 and
+                w <= h / 2 and
+                center_start <= cx <= center_end
+            )
 
-    validated_rects = []
+        if condition:
+            valid_rects.append((x, y, w, h, cx))
 
+
+    # =========================
+    # Regroupement par axe vertical
+    # =========================
+    x_threshold = int(img_w * 0.01)  # tolérance X (0.5 % largeur)
     groups = []
 
-    for rect in candidates:
-        x, y, w, h = rect
-        placed = False
+    for rect in valid_rects:
+        x, y, w, h, cx = rect
+        added = False
 
         for group in groups:
-            gx, _, gw, _ = group[0]
-            if abs(x - gx) <= x_tolerance:
+            group_cx = np.mean([r[4] for r in group])
+            if abs(cx - group_cx) < x_threshold:
                 group.append(rect)
-                placed = True
+                added = True
                 break
 
-        if not placed:
+        if not added:
             groups.append([rect])
 
+    # =========================
+    # Fusion et dessin
+    # =========================
     for group in groups:
-        total_height = sum(r[3] for r in group)
+        x_min = min(r[0] for r in group)
+        y_min = min(r[1] for r in group)
+        x_max = max(r[0] + r[2] for r in group)
+        y_max = max(r[1] + r[3] for r in group)
 
-        if total_height >= min_total_height:
+        height = y_max - y_min
+
+        if height > img_h * 0.6:  # filtrage par hauteur (0 % de l'image)
             return True
     return False
 
@@ -276,102 +309,236 @@ def detect_cross_column_titles(mask):
 
 
 # ============================================================
+# FUSION DES RECTANGLES SUR LA MÊME LIGNE
+# ============================================================
+
+def same_text_row(r1, r2, y_tol_ratio=0.4):
+    x1, y1, w1, h1 = r1
+    x2, y2, w2, h2 = r2
+
+    c1 = y1 + h1 / 2
+    c2 = y2 + h2 / 2
+
+    max_h = max(h1, h2)
+
+    return abs(c1 - c2) <= y_tol_ratio * max_h
+
+
+def merge_rects(rects):
+    merged = []
+    rects = sorted(rects, key=lambda r: (r[1], r[0]))
+
+    used = [False] * len(rects)
+
+    for i, r in enumerate(rects):
+        if used[i]:
+            continue
+
+        x, y, w, h = r
+        x2 = x + w
+        y2 = y + h
+
+        used[i] = True
+
+        for j in range(i + 1, len(rects)):
+            if used[j]:
+                continue
+
+            if same_text_row((x, y, w, h), rects[j]):
+                rx, ry, rw, rh = rects[j]
+
+                x = min(x, rx)
+                y = min(y, ry)
+                x2 = max(x2, rx + rw)
+                y2 = max(y2, ry + rh)
+
+                w = x2 - x
+                h = y2 - y
+
+                used[j] = True
+
+        merged.append((x, y, w, h))
+
+    return merged
+
+# ============================================================
 # PIPELINE PRINCIPAL
 # ============================================================
 
-PDF_PATH = "pinax bsb-p110.pdf"
-PAGE_INDEX = 0
-RENDER_SCALE = 4.17
-
-doc = pdfium.PdfDocument(PDF_PATH)
-pil_img = doc[PAGE_INDEX].render(scale=RENDER_SCALE).to_pil()
-image_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-# --- TITRES ---
-mask_titles = build_title_mask(image_bgr)
-titles = detect_cross_column_titles(mask_titles)
-
-# --- BLOCS ---
-mask_blocks = build_block_mask(image_bgr)
-kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (65, 15))
-dilated = cv2.dilate(mask_blocks, kernel, iterations=4)
-
-cnts, _ = cv2.findContours(
-    dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-)
-
-rects = []
-for c in cnts:
-    x, y, w, h = cv2.boundingRect(c)
-    if w > 1000 or h > 1000:
-        rects.append((x, y, w, h))
-
-rects = sorted(rects, key=rect_area, reverse=True)
-
-filtered_blocks = []
-for r in rects:
-    if not any(rects_overlap(r, k) for k in filtered_blocks):
-        filtered_blocks.append(r)
-
-# ============================================================
-# PRIORITÉ TITRES > BLOCS LÉGÈREMENT PLUS GRANDS
-# ============================================================
-
-MAX_BLOCK_TITLE_AREA_RATIO = 1.35
-MIN_INTERSECTION_RATIO = 0.6
-
-final_blocks = []
-
-for block in filtered_blocks:
-    block_area = rect_area(block)
-    remove_block = False
-
-    for title in titles:
-        if not rects_intersect(block, title):
-            continue
-
-        title_area = rect_area(title)
-
-        # ✅ RÈGLE 1 — ancien comportement (bloc plus petit que le titre)
-        if block_area < title_area:
-            remove_block = True
-            break
-
-        # ✅ RÈGLE 2 — bloc légèrement plus grand mais parasite (GLADIOLUS)
-        inter_ratio = intersection_ratio(block, title)
-        area_ratio = block_area / title_area
-
-        if (
-            inter_ratio >= MIN_INTERSECTION_RATIO and
-            area_ratio <= MAX_BLOCK_TITLE_AREA_RATIO
-        ):
-            remove_block = True
-            break
-
-    if not remove_block:
-        final_blocks.append(block)
-
-filtered_blocks = final_blocks
+import cv2
+import numpy as np
+import pypdfium2 as pdfium
 
 
+def pipeline(pdf_path, page_index=0, render_scale=4.17):
+    # ============================================================
+    # RENDER PAGE
+    # ============================================================
+    doc = pdfium.PdfDocument(pdf_path)
+    pil_img = doc[page_index].render(scale=render_scale).to_pil()
+    image_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    PAGE_H, PAGE_W = image_bgr.shape[:2]
 
-# ============================================================
-# AFFICHAGE
-# ============================================================
+    # ============================================================
+    # TITRES (BLEU)
+    # ============================================================
+    mask_titles = build_title_mask(image_bgr)
+    titles_raw = detect_cross_column_titles(mask_titles)
 
-output = image_bgr.copy()
-i = 0
-for x, y, w, h in filtered_blocks:
-    roi = image_bgr[y:y+h, x:x+w]
-    color = (0, 255, 0) if has_center_black_vertical_line(roi, i=i) else (0, 0, 255)
-    cv2.rectangle(output, (x, y), (x+w, y+h), color, 35)
-    print(f"rectangle: x={x}, y={y}, w={w}, h={h}, center_line={color == (0, 255, 0)} i={i}")
+    LEFT_MARGIN = int(PAGE_W * 0.02)
+    RIGHT_MARGIN = int(PAGE_W * 0.02)
 
-    i += 1
+    titles = [
+        {
+            "x": LEFT_MARGIN,
+            "y": y,
+            "w": PAGE_W - LEFT_MARGIN - RIGHT_MARGIN,
+            "h": h
+        }
+        for (_, y, _, h) in titles_raw
+    ]
+
+    title_rects = [(t["x"], t["y"], t["w"], t["h"]) for t in titles]
+
+    # ============================================================
+    # BLOCS (MASK + DILATION)
+    # ============================================================
+    mask_blocks = build_block_mask(image_bgr)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (65, 15))
+    dilated = cv2.dilate(mask_blocks, kernel, iterations=2)
+
+    cnts, _ = cv2.findContours(
+        dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    rects = []
+    for c in cnts:
+        x, y, w, h = cv2.boundingRect(c)
+        if w > 1000 or h > 1000:
+            rects.append((x, y, w, h))
+
+    # ============================================================
+    # FUSION RECTANGLES SUR LA MÊME LIGNE
+    # ============================================================
+    rects = merge_rects(rects)
+
+    rects = sorted(rects, key=rect_area, reverse=True)
+
+    filtered_blocks = []
+    for r in rects:
+        if not any(rects_overlap(r, k) for k in filtered_blocks):
+            filtered_blocks.append(r)
+
+    # ============================================================
+    # PRIORITÉ TITRES > BLOCS
+    # ============================================================
+    MAX_BLOCK_TITLE_AREA_RATIO = 1.35
+    MIN_INTERSECTION_RATIO = 0.6
+
+    final_blocks = []
+
+    for block in filtered_blocks:
+        block_area = rect_area(block)
+        remove_block = False
+
+        for title in title_rects:
+            if not rects_intersect(block, title):
+                continue
+
+            title_area = rect_area(title)
+            inter_ratio = intersection_ratio(block, title)
+            area_ratio = block_area / title_area
+
+            # Règle 1 : bloc plus petit que le titre
+            if block_area < title_area:
+                remove_block = True
+                break
+
+            # Règle 2 : bloc parasite légèrement plus grand
+            if (
+                inter_ratio >= MIN_INTERSECTION_RATIO and
+                area_ratio <= MAX_BLOCK_TITLE_AREA_RATIO
+            ):
+                remove_block = True
+                break
+
+        if not remove_block:
+            final_blocks.append(block)
+
+    # ============================================================
+    # CLASSIFICATION BLOCS
+    # ============================================================
+    bicolumn_text = []
+    italic_text = []
+
+    for i,(x, y, w, h) in enumerate(final_blocks):
+        roi = image_bgr[y:y + h, x:x + w]
+
+        block_json = {
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h
+        }
+
+        if has_center_black_vertical_line(roi):
+            bicolumn_text.append(block_json)   # 🟢
+        else:
+            italic_text.append(block_json)     # 🔴
+
+    # ============================================================
+    # JSON FINAL
+    # ============================================================
+    return {
+        "titles": titles,                 # 🔵
+        "bicolumn_text": bicolumn_text,   # 🟢
+        "italic_text": italic_text        # 🔴
+    }
+
+if __name__ == "__main__":
+
+    pdf_path = "ert.pdf"
+    page_index = 358
+
+    reslt = pipeline(pdf_path="ert.pdf",page_index=page_index,
+        render_scale=4.17
+    )
+
+    doc = pdfium.PdfDocument(pdf_path)
+    pil_img = doc[page_index].render(scale=4.17).to_pil()
+    image_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    # afficher résultats
+    for title in reslt["titles"]:
+        x, y, w, h = title["x"], title["y"], title["w"], title["h"]
+        cv2.rectangle(
+            image_bgr,
+            (x, y),
+            (x + w, y + h),
+            (255, 0, 0),
+            10
+        )
+    for block in reslt["bicolumn_text"]:
+        x, y, w, h = block["x"], block["y"], block["w"], block["h"]
+        cv2.rectangle(
+            image_bgr,
+            (x, y),
+            (x + w, y + h),
+            (0, 255, 0),
+            10
+        )
+    for block in reslt["italic_text"]:
+        x, y, w, h = block["x"], block["y"], block["w"], block["h"]
+        cv2.rectangle(
+            image_bgr,
+            (x, y),
+            (x + w, y + h),
+            (0, 0, 255),
+            10
+        )
+    cv2.imwrite("debug_pipeline.png", image_bgr)
 
 
-for x, y, w, h in titles:
-    cv2.rectangle(output, (x, y), (x+w, y+h), (255, 0, 0), 25)
 
-cv2.imwrite("final_blocks_and_titles_correct.png", output)
-print(f"✅ {len(filtered_blocks)} blocs — {len(titles)} titres détectés")
+    
+

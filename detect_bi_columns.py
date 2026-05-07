@@ -4,7 +4,7 @@ import numpy as np
 # =========================
 # Chargement image PNG
 # =========================
-imagePath = "aroi_5.png"
+imagePath = "aroi_0.png"
 image_bgr = cv2.imread(imagePath)
 
 if image_bgr is None:
@@ -53,9 +53,17 @@ for c in cnts:
     x, y, w, h = cv2.boundingRect(c)
     cx = x + w // 2
 
+    cv2.rectangle(
+        image_bgr,
+        (x, y),
+        (x + w, y + h),
+        (0, 255, 0),
+        10)
+    
+
     if img_h > 1300:
         condition = (
-            w < img_w * 0.03 and
+            w < img_w * 0.04 and
             h > img_h * 0.1 and
             w <= h / 2 and
             center_start <= cx <= center_end 
@@ -75,7 +83,7 @@ for c in cnts:
             (x, y),
             (x + w, y + h),
             (255, 0, 0),
-            3
+            30
         )
 
 # =========================

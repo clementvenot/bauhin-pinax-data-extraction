@@ -154,11 +154,11 @@ def get_cross_column_titles_from_pdf(
     return len(full_width_boxes), full_width_boxes
 
 
-count, boxes = get_cross_column_titles_from_pdf("pinax-bsb-p41.pdf")
+count, boxes = get_cross_column_titles_from_pdf("ert.pdf")
 
 if __name__ == "__main__":
-    pdf_path = "pinax-bsb-p41.pdf"
-    page_index = 0
+    pdf_path = "ert.pdf"
+    page_index = 350
     render_scale = 4.17
 
     # ==== Détection ====

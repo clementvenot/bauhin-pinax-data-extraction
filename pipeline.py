@@ -124,8 +124,11 @@ def has_center_black_vertical_line(image_bgr):
             groups.append([rect])
 
     # =========================
-    # Fusion et dessin
+    # Fusion et sélection du trait le plus centré
     # =========================
+    best_center_x = None
+    best_distance = None
+
     for group in groups:
         x_min = min(r[0] for r in group)
         y_min = min(r[1] for r in group)
@@ -133,10 +136,15 @@ def has_center_black_vertical_line(image_bgr):
         y_max = max(r[1] + r[3] for r in group)
 
         height = y_max - y_min
+        group_center_x = (x_min + x_max) / 2
 
         if height > img_h * 0.6:  # filtrage par hauteur (0 % de l'image)
-            return True
-    return False
+            distance = abs(group_center_x - (img_w / 2))
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_center_x = int(round(group_center_x))
+
+    return best_center_x
 
 # ============================================================
 # OUTILS RECTANGLES
@@ -481,10 +489,17 @@ def pipeline(pdf_path, page_index=0, render_scale=4.17):
             "h": h
         }
 
-        if has_center_black_vertical_line(roi):
+        center_x = has_center_black_vertical_line(roi)
+
+        if center_x is not None:
+            block_json["center_x"] = x + center_x
             bicolumn_text.append(block_json)   # 🟢
         else:
             italic_text.append(block_json)     # 🔴
+
+    # debug 
+    print(f"Page {page_index} - Titres: {len(titles)}, Blocs bicolumn: {len(bicolumn_text)}, Blocs italic: {len(italic_text)}")
+
 
     # ============================================================
     # JSON FINAL
@@ -498,11 +513,15 @@ def pipeline(pdf_path, page_index=0, render_scale=4.17):
 if __name__ == "__main__":
 
     pdf_path = "ert.pdf"
-    page_index = 358
+    page_index = 100
 
     reslt = pipeline(pdf_path="ert.pdf",page_index=page_index,
         render_scale=4.17
     )
+
+    print(reslt)
+
+    """
 
     doc = pdfium.PdfDocument(pdf_path)
     pil_img = doc[page_index].render(scale=4.17).to_pil()
@@ -537,8 +556,4 @@ if __name__ == "__main__":
             10
         )
     cv2.imwrite("debug_pipeline.png", image_bgr)
-
-
-
-    
-
+    """

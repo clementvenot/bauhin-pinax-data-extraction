@@ -3,12 +3,12 @@ import queue
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from pathlib import Path
 
 from PIL import Image, ImageTk
 import pypdfium2 as pdfium
 
 from pipeline import pipeline as detect_page_regions
-
 
 RECT_COLORS = {
     "titles": "#2d7ff9",
@@ -168,6 +168,7 @@ class RectangleEditorApp(tk.Tk):
         self.label_selector.bind("<<ComboboxSelected>>", self._on_label_selector_change)
 
         ttk.Button(bottom_bar, text="Ajouter un rectangle", command=self.start_add_rectangle).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(bottom_bar, text="Sauver PNG rectangles", command=self.save_rectangles_debug).grid(row=0, column=3, padx=(0, 6))
 
         self.status_label = ttk.Label(bottom_bar, text="Ouvrez un PDF pour commencer.")
         self.status_label.grid(row=0, column=4, sticky="e")
@@ -925,10 +926,10 @@ class RectangleEditorApp(tk.Tk):
         self._clear_interaction_state()
         self._redraw_canvas()
 
-    def validate_and_print_json(self):
+    def _build_rectangle_payload(self):
         self._save_current_page_state()
 
-        payload = {
+        return {
             "pdf_path": self.pdf_path,
             "pages": [
                 {
@@ -943,15 +944,73 @@ class RectangleEditorApp(tk.Tk):
                             "label": rect.get("label", "manual"),
                             **({"center_x": rect["center_x"]} if rect.get("label") == "bicolumn_text" and "center_x" in rect else {}),
                         }
-                        for rect in page_rects
+                        for rect in (page_rects or [])
                     ],
                 }
                 for index, page_rects in enumerate(self.page_annotations)
             ],
         }
 
+    def validate_and_print_json(self):
+        payload = self._build_rectangle_payload()
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         messagebox.showinfo("Validation", "JSON imprimé dans la console.")
+
+    def save_rectangles_debug(self):
+        if self.current_image is None:
+            messagebox.showerror("Debug", "Aucune page affichée à enregistrer.")
+            return
+
+        rectangles = self.current_page_data or []
+        if not rectangles:
+            messagebox.showerror("Debug", "Aucun rectangle à enregistrer sur cette page.")
+            return
+
+        if self.pdf_path:
+            debug_dir = Path(self.pdf_path).with_name(f"{Path(self.pdf_path).stem}_page_{self.current_page + 1}_rectangles")
+        else:
+            debug_dir = Path.cwd() / f"page_{self.current_page + 1}_rectangles"
+
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_files = []
+        image_width, image_height = self.current_image.size
+
+        for index, rect in enumerate(rectangles, start=1):
+            x1 = int(clamp(rect["x"], 0, image_width))
+            y1 = int(clamp(rect["y"], 0, image_height))
+            x2 = int(clamp(rect["x"] + rect["w"], 0, image_width))
+            y2 = int(clamp(rect["y"] + rect["h"], 0, image_height))
+
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            rect_uid = rect.get("uid", index)
+            rect_label = rect.get("label", "manual")
+
+            if rect_label == "bicolumn_text":
+                separator_x = int(clamp(rect.get("center_x", x1 + (x2 - x1) // 2), x1, x2))
+                left_path = debug_dir / f"rect_{index:03d}_uid_{rect_uid}_{rect_label}_left.png"
+                right_path = debug_dir / f"rect_{index:03d}_uid_{rect_uid}_{rect_label}_right.png"
+
+                if separator_x > x1:
+                    self.current_image.crop((x1, y1, separator_x, y2)).save(left_path)
+                    saved_files.append(left_path)
+                if x2 > separator_x:
+                    self.current_image.crop((separator_x, y1, x2, y2)).save(right_path)
+                    saved_files.append(right_path)
+                continue
+
+            debug_path = debug_dir / f"rect_{index:03d}_uid_{rect_uid}_{rect_label}.png"
+            self.current_image.crop((x1, y1, x2, y2)).save(debug_path)
+            saved_files.append(debug_path)
+
+        if not saved_files:
+            messagebox.showerror("Debug", "Aucun rectangle valide n'a pu être enregistré.")
+            return
+
+        self.status_label.config(text=f"{len(saved_files)} PNG enregistrés")
+        messagebox.showinfo("Debug", "Rectangles enregistrés dans:\n" + "\n".join(str(path) for path in saved_files))
 
 
 if __name__ == "__main__":

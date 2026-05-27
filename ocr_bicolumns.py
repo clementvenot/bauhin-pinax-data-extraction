@@ -17,18 +17,17 @@ if Path(HOMEBREW_TESSERACT).exists():
 pytesseract.pytesseract.lang = "lat"
 
 REMAINING_COLOR = "red"
+INDENT_COLOR = "blue"
 ROMAN_BULLET_COLOR = "green"
 SPECIES_TITLE_COLOR = "orange"
 ROMAN_CHARS = set("IVXLCDM")
 ROMAN_CONFUSION_MAP = str.maketrans({"H": "I", "J": "I", "Y": "I", "1": "I", "|": "I", "l": "I"})
-TYPE_COLOR_LABELS = {
-    "espece": "vert",
-    "taxon": "rouge",
-    "variete": "orange",
-}
 
 
 def compute_right_gap_reference(right_gap_values):
+    # utiliser la moyenne des plus petits gaps pour estimer la marge de droite, 
+    # en limitant l'influence des valeurs aberrantes
+
     sorted_values = sorted(right_gap_values)
     if not sorted_values:
         return 0, 0
@@ -43,6 +42,10 @@ def compute_right_gap_reference(right_gap_values):
 
 
 def compute_roman_bullet_score(line_items, right_gap_px=0, right_gap_reference=0, right_gap_spread=0):
+    # évaluer la probabilité que le premier token d'une ligne soit une puce romaine, 
+    # en se basant sur sa forme, sa ponctuation, sa casse, sa proximité avec la marge de droite, 
+    # et la présence de caractères romains
+
     if not line_items:
         return 0, "", [], ""
 
@@ -143,6 +146,9 @@ def compute_roman_bullet_score(line_items, right_gap_px=0, right_gap_reference=0
 
 
 def compute_species_title_score(indent_px=0, right_gap_px=0, right_gap_reference=0, right_gap_spread=0):
+    # évaluer la probabilité qu'une ligne soit un titre d'espèce, en se basant sur son indentation, 
+    # sa proximité avec la marge de droite, et l'équilibre entre les deux
+    
     right_gap_threshold = right_gap_reference + max(90, right_gap_spread)
     balance_limit = max(30, int(0.25 * max(1, indent_px, right_gap_px, right_gap_reference)))
     balance_gap = abs(indent_px - right_gap_px)
@@ -167,15 +173,25 @@ def compute_species_title_score(indent_px=0, right_gap_px=0, right_gap_reference
     return max(0, min(score, 100)), reasons
 
 
-def classify_block_type(roman_is_bullet, species_title_is_title):
+def classify_block_type(indent_group, roman_is_bullet, species_title_is_title):
+    # classer les lignes en types "espece", "variete", "commentaire" 
+    # ou "taxon" en fonction de leur indentation,
+    # de la probabilité qu'elles soient des puces romaines, 
+    # et de la probabilité qu'elles soient des titres d'espèce
+    
     if species_title_is_title:
         return "espece", SPECIES_TITLE_COLOR
     if roman_is_bullet:
         return "variete", ROMAN_BULLET_COLOR
+    if indent_group > 0:
+        return "commentaire", INDENT_COLOR
     return "taxon", REMAINING_COLOR
 
 
 def compute_indent_breakpoints(indent_values):
+    # identifier les seuils d'indentation qui permettent de différencier les groupes de lignes,
+    # en se basant sur la distribution des indentations et en limitant l'influence des valeurs aberrantes
+
     sorted_values = sorted(indent_values)
     if len(sorted_values) < 2:
         return []
@@ -206,6 +222,9 @@ def compute_indent_breakpoints(indent_values):
 
 
 def get_indent_group(indent_px, indent_breakpoints):
+    # déterminer le groupe d'indentation d'une ligne 
+    # en fonction de ses pixels d'indentation et des seuils identifiés
+
     if not indent_breakpoints:
         return 0
 
@@ -213,6 +232,8 @@ def get_indent_group(indent_px, indent_breakpoints):
 
 
 def strip_edge_bars(text):
+    # supprimer les barres verticales en début et fin de ligne, qui sont souvent des artefacts d'OCR
+
     stripped_text = text.strip()
     if stripped_text.startswith("|"):
         stripped_text = stripped_text[1:].lstrip()
@@ -222,10 +243,16 @@ def strip_edge_bars(text):
 
 
 def remove_bar_tokens(line_items):
+    # supprimer les tokens qui ne contiennent que des barres verticales, 
+    # qui sont souvent des artefacts d'OCR
+
     return [item for item in line_items if item["text"] != "|"]
 
 
 def draw_right_gap_tube(debug_img, page_right_edge, right_gap_reference, right_gap_spread):
+    # dessiner un tube vertical indiquant la zone de la marge de droite, 
+    # pour aider à visualiser l'analyse
+
     if right_gap_reference <= 0 and right_gap_spread <= 0:
         return debug_img
 
@@ -251,6 +278,10 @@ def draw_right_gap_tube(debug_img, page_right_edge, right_gap_reference, right_g
 
 
 def merge_wrapped_lines(visual_lines, page_left_margin, indent_breakpoints, page_right_edge, right_gap_reference, right_gap_spread):
+    # fusionner les lignes qui semblent être des lignes de texte enroulées,
+    # en se basant sur leur proximité verticale, leur indentation, 
+    # et leur proximité avec la marge de droite, tout en limitant les fusions abusives grâce à des seuils adaptatifs
+    
     if not visual_lines:
         return []
 
@@ -363,6 +394,9 @@ def merge_wrapped_lines(visual_lines, page_left_margin, indent_breakpoints, page
 
 
 def merge_visual_lines(grouped_lines):
+    # fusionner les lignes détectées par tesseract qui sont très proches verticalement,
+    # pour compenser les erreurs de segmentation, 
+    # tout en limitant les fusions abusives grâce à des seuils adaptatifs basés sur la taille des lignes
     line_boxes = []
 
     for key, line_items in grouped_lines.items():
@@ -421,25 +455,28 @@ def merge_visual_lines(grouped_lines):
     return merged_lines
 
 
-def extract_classified_lines(img, debug=False, debug_path="ocr_debug.png"):
-
-    # extraire les données de tesseract avec les positions des mots
+def extract_line_indentation(img):
+    # extraire les lignes de texte d'une image avec tesseract,
+    # analyser leur indentation, leur proximité avec la marge de droite,
+    # et les fusionner pour compenser les erreurs d'OCR,
+    # tout en limitant les fusions abusives grâce à des seuils adaptatifs basés sur la distribution des indentations et des gaps de droite, 
+    # puis classer les lignes en types "espece", "variete", "commentaire" ou "taxon" en fonction de ces analyses
+    
     data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-    grouped_lines = defaultdict(list) 
+    grouped_lines = defaultdict(list)
 
-    # parcourir les mots extraits et les regrouper par ligne
     for index, text in enumerate(data["text"]):
-        cleaned_text = text.strip() # retirer les espaces superflus
-        if not cleaned_text: # ignorer les lignes vides
+        cleaned_text = text.strip()
+        if not cleaned_text:
             continue
 
-        key = ( # identifier unique de la ligne
+        key = (
             data["page_num"][index],
             data["block_num"][index],
             data["par_num"][index],
             data["line_num"][index],
         )
-        grouped_lines[key].append( # ajouter le mot à la ligne correspondante
+        grouped_lines[key].append(
             {
                 "text": cleaned_text,
                 "left": data["left"][index],
@@ -449,7 +486,8 @@ def extract_classified_lines(img, debug=False, debug_path="ocr_debug.png"):
             }
         )
     if not grouped_lines:
-        return []
+        print("Aucun texte détecté")
+        return
 
     page_left_margin = min(item["left"] for line in grouped_lines.values() for item in line)
     page_right_edge = img.width
@@ -467,19 +505,7 @@ def extract_classified_lines(img, debug=False, debug_path="ocr_debug.png"):
         right_gap_spread,
     )
 
-    debug_img = None
-    draw = None
-    if debug:
-        debug_img = draw_right_gap_tube(
-            img.convert("RGBA"),
-            page_right_edge,
-            right_gap_reference,
-            right_gap_spread,
-        )
-        draw = ImageDraw.Draw(debug_img)
-
-    results = []
-
+    analyzed_blocks = []
     for merged_block in merged_blocks:
         line_items = merged_block["items"]
         if not line_items:
@@ -520,77 +546,132 @@ def extract_classified_lines(img, debug=False, debug_path="ocr_debug.png"):
             roman_score, roman_token, roman_reasons, roman_core = 0, "", [], ""
             roman_is_bullet = False
             species_title_score, species_title_reasons = 0, []
-        block_type, debug_color = classify_block_type(roman_is_bullet, species_title_is_title)
+        block_type, debug_color = classify_block_type(indent_group, roman_is_bullet, species_title_is_title)
         display_line_text = strip_edge_bars(line_text)
-        if debug and indent_group > 0:
-            indent_strip_right = min(start_left + 10, line_right)
-            draw.rectangle(
-                [start_left, start_top, indent_strip_right, start_bottom],
-                fill=(0, 255, 0, 85) if roman_is_bullet else ((255, 165, 0, 85) if species_title_is_title else (0, 0, 255, 85)),
-            )
-        if debug:
-            draw.rectangle(
-                [line_left, line_top, line_right, line_bottom],
-                outline=debug_color,
-                width=10,
-            )
-            draw.text(
-                (start_left, max(0, start_top - 12)),
-                f"g{indent_group} | {indent_px}px | {right_gap_px}px | R{roman_score}% | T{species_title_score}%",
-                fill=debug_color,
-            )
-
-        results.append(
+        analyzed_blocks.append(
             {
                 "type": block_type,
-                "color": TYPE_COLOR_LABELS[block_type],
+                "color": debug_color,
                 "text": display_line_text,
+                "raw_text": line_text,
                 "indent_group": indent_group,
                 "indent_px": indent_px,
                 "right_gap_px": right_gap_px,
                 "roman_score": roman_score,
                 "species_title_score": species_title_score,
-                "roman_reasons": roman_reasons,
-                "species_title_reasons": species_title_reasons,
+                "roman_is_bullet": roman_is_bullet,
+                "species_title_is_title": species_title_is_title,
+                "line_left": line_left,
+                "line_top": line_top,
+                "line_right": line_right,
+                "line_bottom": line_bottom,
+                "start_left": start_left,
+                "start_top": start_top,
+                "start_right": start_right,
+                "start_bottom": start_bottom,
+                "start_items": start_items,
+                "debug_label": f"g{indent_group} | {indent_px}px | {right_gap_px}px | R{roman_score}% | T{species_title_score}%",
             }
         )
 
-    if debug and debug_img is not None:
-        print(f"Indent breakpoints: {indent_breakpoints if indent_breakpoints else 'none'}")
-        print(f"Right gap reference: {right_gap_reference}px | spread: {right_gap_spread}px")
-        debug_img.save(debug_path)
-        print(f"Image debug save dans {debug_path}")
+    return {
+        "blocks": analyzed_blocks,
+        "indent_breakpoints": indent_breakpoints,
+        "right_gap_reference": right_gap_reference,
+        "right_gap_spread": right_gap_spread,
+        "page_right_edge": page_right_edge,
+    }
 
-    return results
+
+def format_pipeline_result(analysis):
+    # formater les résultats de l'analyse pour affichage, 
+    # en associant des couleurs et des labels aux types de blocs détectés 
+    # pour faciliter la lecture et la compréhension des résultats 
+
+    display_colors = {
+        "espece": "vert",
+        "taxon": "rouge",
+        "variete": "orange",
+        "commentaire": "bleu",
+    }
+    display_labels = {
+        "variete": "variété",
+    }
+
+    formatted_lines = []
+    for block in analysis["blocks"]:
+        block_type = block["type"]
+        label = display_labels.get(block_type, block_type)
+        color = display_colors.get(block_type, "inconnu")
+        formatted_lines.append(f'{label} ({color}) : {json.dumps(block["text"], ensure_ascii=False)}')
+
+    return formatted_lines
 
 
-def format_classified_lines(results):
-    return "\n".join(
-        f'{item["type"]} ({item["color"]}) : {json.dumps(item["text"], ensure_ascii=False)}'
-        for item in results
+def render_debug_image(img, analysis, output_path="ocr_debug.png"):
+    # créer une image de debug avec des indicateurs visuels pour les blocs détectés,
+    # les seuils d'indentation, et la marge de droite, pour aider à comprendre et vérifier l'analyse effectuée sur l'image, 
+    # en sauvegardant cette image dans un fichier pour consultation
+    debug_img = draw_right_gap_tube(
+        img.convert("RGBA"),
+        analysis["page_right_edge"],
+        analysis["right_gap_reference"],
+        analysis["right_gap_spread"],
+    )
+    draw = ImageDraw.Draw(debug_img)
+
+    for block in analysis["blocks"]:
+        if block["indent_group"] > 0:
+            indent_strip_right = min(block["start_left"] + 10, block["line_right"])
+            draw.rectangle(
+                [block["start_left"], block["start_top"], indent_strip_right, block["start_bottom"]],
+                fill=(0, 255, 0, 85)
+                if block["roman_is_bullet"]
+                else ((255, 165, 0, 85) if block["species_title_is_title"] else (0, 0, 255, 85)),
+            )
+        draw.rectangle(
+            [block["line_left"], block["line_top"], block["line_right"], block["line_bottom"]],
+            outline=block["color"],
+            width=10,
+        )
+        draw.text(
+            (block["start_left"], max(0, block["start_top"] - 12)),
+            block["debug_label"],
+            fill=block["color"],
+        )
+
+    print(f"Indent breakpoints: {analysis['indent_breakpoints'] if analysis['indent_breakpoints'] else 'none'}")
+    print(
+        f"Right gap reference: {analysis['right_gap_reference']}px | spread: {analysis['right_gap_spread']}px"
     )
 
+    debug_img.save(output_path)
+    print(f"Image debug save dans {output_path}")
 
-def print_line_indentation(img, debug=False, debug_path="ocr_debug.png"):
-    results = extract_classified_lines(img, debug=debug, debug_path=debug_path)
-    if not results:
-        print("Aucun texte détecté")
-        return []
 
-    print(format_classified_lines(results))
-    return results
+def analyze_image(img):
+    # analyser une image PIL en extrayant les lignes de texte avec tesseract.
+    # pipeline complète d'analyse de l'image, de l'extraction des lignes, à l'identification des types de blocs.
+
+    analysis = extract_line_indentation(img)
+    return format_pipeline_result(analysis)
+
 
 def delete_bars(ocr_result):
+    # supprimer les barres verticales en début et fin de ligne dans le résultat brut de l'OCR,
+    # pour nettoyer les artefacts courants d'OCR avant toute autre analyse ou affichage
     return "\n".join(strip_edge_bars(line) for line in ocr_result.splitlines())
 
-
-
-
-
-#print("bicolumn text left (without bars)")
-#print(delete_bars(ocr_result))
-
-
 if __name__ == "__main__":
+    # exemple d'utilisation de la pipeline d'analyse sur une image spécifique,
     img = Image.open("rect_003_uid_3_bicolumn_text_left.png")
-    print_line_indentation(img, debug=True)
+
+    analysis = extract_line_indentation(img) # extract indentation and classify lines
+
+    render_debug_image(img, analysis) # debug image with visual indicators
+    
+    for line in analyze_image(img):
+        print(line)
+
+    #for line in format_pipeline_result(analysis): # print formatted results
+    #    print(line)

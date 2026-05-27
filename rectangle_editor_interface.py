@@ -12,15 +12,16 @@ from pipeline import pipeline as detect_page_regions
 
 RECT_COLORS = {
     "titles": "#2d7ff9",
+    "localisation": "#ffd900",
     "bicolumn_text": "#2ca02c",
     "italic_text": "#d62728",
-    "manual": "#f59e0b",
 }
 
 RECT_STROKE_WIDTH = 3
 
 RECT_LABELS_TO_DISPLAY = {
     "titles": "titre",
+    "localisation": "localisation",
     "italic_text": "italique",
     "bicolumn_text": "bi-colonne",
 }
@@ -38,6 +39,10 @@ def label_to_display(label):
 
 def label_to_internal(label):
     return RECT_LABELS_TO_INTERNAL.get(label, label)
+
+
+def rect_color(label):
+    return RECT_COLORS.get(label_to_internal(label), RECT_COLORS["titles"])
 
 
 class RectangleEditorApp(tk.Tk):
@@ -77,6 +82,9 @@ class RectangleEditorApp(tk.Tk):
         self.drag_anchor_rect = None
         self.new_rect_label = tk.StringVar(value=label_to_display("titles"))
         self._next_rect_uid = 1
+
+        self.gallery_window = None
+        self.gallery_export_items = []
 
         self.view_scale = 1.0
         self.offset_x = 0
@@ -142,25 +150,27 @@ class RectangleEditorApp(tk.Tk):
         right_panel = ttk.Frame(main, padding=(12, 0, 0, 0))
         right_panel.grid(row=0, column=1, rowspan=3, sticky="nsew")
         right_panel.columnconfigure(0, weight=1)
-        right_panel.rowconfigure(0, weight=1)
+        right_panel.rowconfigure(1, weight=1)
+
+        ttk.Button(right_panel, text="OCR", command=lambda: None).grid(row=0, column=0, sticky="w", pady=(0, 8))
 
         ttk.Label(
             right_panel,
-            text="Panneau droit libre",
+            text="Panneau droit vide pour plus tard",
             foreground="#6b7280",
             anchor="center",
             justify="center",
-        ).grid(row=0, column=0, sticky="nsew")
+        ).grid(row=1, column=0, sticky="nsew")
 
         bottom_bar = ttk.Frame(main)
         bottom_bar.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        bottom_bar.columnconfigure(4, weight=1)
+        bottom_bar.columnconfigure(7, weight=1)
 
         ttk.Label(bottom_bar, text="Type:").grid(row=0, column=0, padx=(0, 4))
         self.label_selector = ttk.Combobox(
             bottom_bar,
             textvariable=self.new_rect_label,
-            values=["titre", "italique", "bi-colonne"],
+            values=["titre", "localisation", "italique", "bi-colonne"],
             state="readonly",
             width=16,
         )
@@ -168,10 +178,12 @@ class RectangleEditorApp(tk.Tk):
         self.label_selector.bind("<<ComboboxSelected>>", self._on_label_selector_change)
 
         ttk.Button(bottom_bar, text="Ajouter un rectangle", command=self.start_add_rectangle).grid(row=0, column=2, padx=(0, 6))
-        ttk.Button(bottom_bar, text="Sauver PNG rectangles", command=self.save_rectangles_debug).grid(row=0, column=3, padx=(0, 6))
 
-        self.status_label = ttk.Label(bottom_bar, text="Ouvrez un PDF pour commencer.")
-        self.status_label.grid(row=0, column=4, sticky="e")
+        self.validate_border_button_text = tk.StringVar(value="Valider bordure page 0")
+        ttk.Button(bottom_bar, textvariable=self.validate_border_button_text, command=self.validate_current_page_borders).grid(row=0, column=3, padx=(0, 6))
+
+        self.status_label = ttk.Label(bottom_bar, text="Ouvrez un PDF pour commencer.", width=34, anchor="e")
+        self.status_label.grid(row=0, column=7, sticky="e")
 
     def _prompt_for_pdf(self):
         pdf_path = filedialog.askopenfilename(
@@ -237,13 +249,14 @@ class RectangleEditorApp(tk.Tk):
 
             annotations = []
             for label in ("titles", "bicolumn_text", "italic_text"):
-                for rect in page_result.get(label, []):
+                for rect_index, rect in enumerate(page_result.get(label, [])):
+                    rect_label = "localisation" if label == "titles" and rect_index == 0 else label
                     annotation = {
                         "x": int(rect["x"]),
                         "y": int(rect["y"]),
                         "w": int(rect["w"]),
                         "h": int(rect["h"]),
-                        "label": label,
+                        "label": rect_label,
                     }
 
                     if label == "bicolumn_text" and "center_x" in rect:
@@ -353,7 +366,160 @@ class RectangleEditorApp(tk.Tk):
 
     def _update_page_label(self):
         self.page_label.config(text=f"Page {self.current_page + 1 if self.page_count else 0} / {self.page_count}")
+        self.validate_border_button_text.set(f"Valider bordure page {self.current_page + 1 if self.page_count else 0}")
         self.status_label.config(text=f"{len(self.current_page_data)} rectangles sur cette page")
+
+    def _make_export_display_name(self, rect_label, count, variant=None):
+        display_label = label_to_display(rect_label)
+
+        if rect_label == "localisation":
+            return display_label if count == 1 else f"{display_label} {count}"
+
+        if rect_label == "bicolumn_text" and variant:
+            return f"{display_label} {count} {variant}"
+
+        return f"{display_label} {count}"
+
+    def _export_current_page_rectangles(self):
+        if self.current_image is None:
+            messagebox.showerror("Debug", "Aucune page affichée à enregistrer.")
+            return []
+
+        rectangles = self.current_page_data or []
+        if not rectangles:
+            messagebox.showerror("Debug", "Aucun rectangle à enregistrer sur cette page.")
+            return []
+
+        if self.pdf_path:
+            debug_dir = Path(self.pdf_path).with_name(f"{Path(self.pdf_path).stem}_page_{self.current_page + 1}_rectangles")
+        else:
+            debug_dir = Path.cwd() / f"page_{self.current_page + 1}_rectangles"
+
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_items = []
+        image_width, image_height = self.current_image.size
+        label_counts = {"titles": 0, "localisation": 0, "italic_text": 0, "bicolumn_text": 0}
+
+        ordered_rectangles = sorted(rectangles, key=lambda rect: (rect["y"], rect["x"]))
+
+        for index, rect in enumerate(ordered_rectangles, start=1):
+            x1 = int(clamp(rect["x"], 0, image_width))
+            y1 = int(clamp(rect["y"], 0, image_height))
+            x2 = int(clamp(rect["x"] + rect["w"], 0, image_width))
+            y2 = int(clamp(rect["y"] + rect["h"], 0, image_height))
+
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            rect_uid = rect.get("uid", index)
+            rect_label = rect.get("label", "manual")
+
+            if rect_label == "bicolumn_text":
+                label_counts[rect_label] += 1
+                rect_count = label_counts[rect_label]
+                separator_x = int(clamp(rect.get("center_x", x1 + (x2 - x1) // 2), x1, x2))
+
+                if separator_x > x1:
+                    left_name = self._make_export_display_name(rect_label, rect_count, "gauche")
+                    left_path = debug_dir / f"{left_name.lower().replace(' ', '_')}.png"
+                    self.current_image.crop((x1, y1, separator_x, y2)).save(left_path)
+                    saved_items.append({"path": left_path, "name": left_name})
+
+                if x2 > separator_x:
+                    right_name = self._make_export_display_name(rect_label, rect_count, "droite")
+                    right_path = debug_dir / f"{right_name.lower().replace(' ', '_')}.png"
+                    self.current_image.crop((separator_x, y1, x2, y2)).save(right_path)
+                    saved_items.append({"path": right_path, "name": right_name})
+                continue
+
+            label_counts[rect_label] = label_counts.get(rect_label, 0) + 1
+            rect_count = label_counts[rect_label]
+            display_name = self._make_export_display_name(rect_label, rect_count)
+            export_path = debug_dir / f"{display_name.lower().replace(' ', '_')}.png"
+            self.current_image.crop((x1, y1, x2, y2)).save(export_path)
+            saved_items.append({"path": export_path, "name": display_name})
+
+        if not saved_items:
+            messagebox.showerror("Debug", "Aucun rectangle valide n'a pu être enregistré.")
+            return []
+
+        return saved_items
+
+    def _open_rectangles_gallery(self, exported_items):
+        if self.gallery_window is not None and self.gallery_window.winfo_exists():
+            self.gallery_window.destroy()
+
+        gallery_window = tk.Toplevel(self)
+        self.gallery_window = gallery_window
+        gallery_window.title(f"PNG générés - page {self.current_page + 1}")
+        gallery_window.geometry("1600x900")
+        gallery_window.columnconfigure(0, weight=1)
+        gallery_window.columnconfigure(1, weight=1)
+        gallery_window.rowconfigure(0, weight=1)
+
+        left_panel = ttk.Frame(gallery_window, padding=12)
+        left_panel.grid(row=0, column=0, sticky="nsew")
+        left_panel.columnconfigure(0, weight=1)
+        left_panel.rowconfigure(1, weight=1)
+
+        ttk.Label(left_panel, text="Images générées", font=("Helvetica", 14, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        scroll_container = ttk.Frame(left_panel)
+        scroll_container.grid(row=1, column=0, sticky="nsew")
+        scroll_container.columnconfigure(0, weight=1)
+        scroll_container.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(scroll_container, bg="#f8fafc", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        content_frame = ttk.Frame(canvas)
+        content_window = canvas.create_window((0, 0), window=content_frame, anchor="nw")
+
+        def _update_scrollregion(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _resize_content(event):
+            canvas.itemconfigure(content_window, width=event.width)
+
+        content_frame.bind("<Configure>", _update_scrollregion)
+        canvas.bind("<Configure>", _resize_content)
+
+        photo_refs = []
+        for item in exported_items:
+            card = ttk.Frame(content_frame, padding=10, relief="solid")
+            card.pack(fill="x", pady=(0, 10))
+
+            ttk.Label(card, text=item["name"], anchor="w", font=("Helvetica", 12, "bold")).pack(anchor="w", pady=(0, 6))
+
+            with Image.open(item["path"]) as image:
+                preview = image.convert("RGB")
+                preview.thumbnail((760, 240), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(preview)
+
+            photo_refs.append(photo)
+            ttk.Label(card, image=photo).pack(anchor="w")
+
+        gallery_window._photo_refs = photo_refs
+
+        right_panel = ttk.Frame(gallery_window, padding=12)
+        right_panel.grid(row=0, column=1, sticky="nsew")
+        right_panel.columnconfigure(0, weight=1)
+        right_panel.rowconfigure(0, weight=1)
+
+        ttk.Frame(right_panel).grid(row=0, column=0, sticky="nsew")
+
+    def validate_current_page_borders(self):
+        exported_items = self._export_current_page_rectangles()
+        if not exported_items:
+            return
+
+        self.gallery_export_items = exported_items
+        self._open_rectangles_gallery(exported_items)
+        self.status_label.config(text=f"{len(exported_items)} PNG générés")
 
     def prev_page(self):
         if self.page_count and self.current_page > 0:
@@ -460,7 +626,7 @@ class RectangleEditorApp(tk.Tk):
 
         canvas_x1, canvas_y1 = self._image_to_canvas(rect["x"], rect["y"])
         canvas_x2, canvas_y2 = self._image_to_canvas(rect["x"] + rect["w"], rect["y"] + rect["h"])
-        color = RECT_COLORS.get(rect.get("label", "manual"), RECT_COLORS["manual"])
+        color = rect_color(rect.get("label", "manual"))
         width = RECT_STROKE_WIDTH
 
         rect_id = self.canvas.create_rectangle(
@@ -623,7 +789,7 @@ class RectangleEditorApp(tk.Tk):
         self.canvas.coords(rect_id, canvas_x1, canvas_y1, canvas_x2, canvas_y2)
         self.canvas.itemconfig(
             rect_id,
-            outline=RECT_COLORS.get(rect.get("label", "manual"), RECT_COLORS["manual"]),
+            outline=rect_color(rect.get("label", "manual")),
             width=RECT_STROKE_WIDTH,
         )
 
@@ -660,7 +826,7 @@ class RectangleEditorApp(tk.Tk):
         if rect is None:
             return
 
-        label = label_to_display(rect.get("label", "manual"))
+        label = label_to_display(label_to_internal(rect.get("label", "manual")))
         if label not in self.label_selector["values"]:
             label = self.label_selector["values"][0]
 
@@ -672,9 +838,9 @@ class RectangleEditorApp(tk.Tk):
         if rect is None:
             return
 
-        label = label_to_display(label)
-        if label not in self.label_selector["values"]:
-            label = self.label_selector["values"][0]
+        label = label_to_internal(label)
+        if label_to_display(label) not in self.label_selector["values"]:
+            label = label_to_internal(self.label_selector["values"][0])
 
         rect["label"] = label
         self._save_current_page_state()
@@ -773,7 +939,7 @@ class RectangleEditorApp(tk.Tk):
                 canvas_y,
                 canvas_x,
                 canvas_y,
-                outline=RECT_COLORS.get(label_to_internal(self.new_rect_label.get()), RECT_COLORS["manual"]),
+                outline=rect_color(label_to_internal(self.new_rect_label.get())),
                 width=RECT_STROKE_WIDTH,
                 dash=(4, 2),
             )
@@ -850,7 +1016,8 @@ class RectangleEditorApp(tk.Tk):
                 rect["center_x"] = int(clamp(separator_x, rect["x"], rect["x"] + rect["w"]))
         elif self.action_mode == "separator":
             if rect.get("label") == "bicolumn_text":
-                rect["center_x"] = int(clamp(image_x, rect["x"], rect["x"] + rect["w"]))
+                separator_x = base.get("center_x", base["x"] + base["w"] // 2) + dx
+                rect["center_x"] = int(clamp(separator_x, rect["x"], rect["x"] + rect["w"]))
         elif self.action_mode.startswith("resize:"):
             handle = self.action_mode.split(":", 1)[1]
             x1 = base["x"]
@@ -957,60 +1124,11 @@ class RectangleEditorApp(tk.Tk):
         messagebox.showinfo("Validation", "JSON imprimé dans la console.")
 
     def save_rectangles_debug(self):
-        if self.current_image is None:
-            messagebox.showerror("Debug", "Aucune page affichée à enregistrer.")
+        exported_items = self._export_current_page_rectangles()
+        if not exported_items:
             return
 
-        rectangles = self.current_page_data or []
-        if not rectangles:
-            messagebox.showerror("Debug", "Aucun rectangle à enregistrer sur cette page.")
-            return
-
-        if self.pdf_path:
-            debug_dir = Path(self.pdf_path).with_name(f"{Path(self.pdf_path).stem}_page_{self.current_page + 1}_rectangles")
-        else:
-            debug_dir = Path.cwd() / f"page_{self.current_page + 1}_rectangles"
-
-        debug_dir.mkdir(parents=True, exist_ok=True)
-
-        saved_files = []
-        image_width, image_height = self.current_image.size
-
-        for index, rect in enumerate(rectangles, start=1):
-            x1 = int(clamp(rect["x"], 0, image_width))
-            y1 = int(clamp(rect["y"], 0, image_height))
-            x2 = int(clamp(rect["x"] + rect["w"], 0, image_width))
-            y2 = int(clamp(rect["y"] + rect["h"], 0, image_height))
-
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            rect_uid = rect.get("uid", index)
-            rect_label = rect.get("label", "manual")
-
-            if rect_label == "bicolumn_text":
-                separator_x = int(clamp(rect.get("center_x", x1 + (x2 - x1) // 2), x1, x2))
-                left_path = debug_dir / f"rect_{index:03d}_uid_{rect_uid}_{rect_label}_left.png"
-                right_path = debug_dir / f"rect_{index:03d}_uid_{rect_uid}_{rect_label}_right.png"
-
-                if separator_x > x1:
-                    self.current_image.crop((x1, y1, separator_x, y2)).save(left_path)
-                    saved_files.append(left_path)
-                if x2 > separator_x:
-                    self.current_image.crop((separator_x, y1, x2, y2)).save(right_path)
-                    saved_files.append(right_path)
-                continue
-
-            debug_path = debug_dir / f"rect_{index:03d}_uid_{rect_uid}_{rect_label}.png"
-            self.current_image.crop((x1, y1, x2, y2)).save(debug_path)
-            saved_files.append(debug_path)
-
-        if not saved_files:
-            messagebox.showerror("Debug", "Aucun rectangle valide n'a pu être enregistré.")
-            return
-
-        self.status_label.config(text=f"{len(saved_files)} PNG enregistrés")
-        messagebox.showinfo("Debug", "Rectangles enregistrés dans:\n" + "\n".join(str(path) for path in saved_files))
+        messagebox.showinfo("Debug", "Rectangles enregistrés dans:\n" + "\n".join(str(item["path"]) for item in exported_items))
 
 
 if __name__ == "__main__":

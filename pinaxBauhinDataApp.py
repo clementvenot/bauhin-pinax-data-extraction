@@ -45,6 +45,8 @@ def label_to_internal(label):
 
 def rect_color(label):
     return RECT_COLORS.get(label_to_internal(label), RECT_COLORS["titles"])
+def is_italic_name(normalized_name):
+    return "italic" in normalized_name or "italique" in normalized_name
 
 
 class PinaxBauhinDataApp(tk.Tk):
@@ -88,6 +90,7 @@ class PinaxBauhinDataApp(tk.Tk):
         self.gallery_window = None
         self.gallery_export_items = []
         self.validated_titles = []
+        self.validated_italics = []
         self._validated_title_counter = 1
 
         self.view_scale = 1.0
@@ -155,6 +158,7 @@ class PinaxBauhinDataApp(tk.Tk):
         right_panel.grid(row=0, column=1, rowspan=3, sticky="nsew")
         right_panel.columnconfigure(0, weight=1)
         right_panel.rowconfigure(1, weight=1)
+        right_panel.rowconfigure(3, weight=1)
 
         ttk.Label(right_panel, text="Titres validés", font=("Helvetica", 13, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 8))
 
@@ -175,6 +179,26 @@ class PinaxBauhinDataApp(tk.Tk):
         self.validated_titles_inner.bind("<Configure>", self._update_validated_titles_scrollregion)
         self.validated_titles_canvas.bind("<Configure>", self._resize_validated_titles_inner)
         self._refresh_validated_titles_panel()
+
+        ttk.Label(right_panel, text="Textes italiques", font=("Helvetica", 13, "bold")).grid(row=2, column=0, sticky="w", pady=(12, 8))
+
+        italics_container = ttk.Frame(right_panel)
+        italics_container.grid(row=3, column=0, sticky="nsew")
+        italics_container.columnconfigure(0, weight=1)
+        italics_container.rowconfigure(0, weight=1)
+
+        self.validated_italics_canvas = tk.Canvas(italics_container, highlightthickness=0, bg="#ffffff")
+        self.validated_italics_scrollbar = ttk.Scrollbar(italics_container, orient="vertical", command=self.validated_italics_canvas.yview)
+        self.validated_italics_canvas.configure(yscrollcommand=self.validated_italics_scrollbar.set)
+        self.validated_italics_canvas.grid(row=0, column=0, sticky="nsew")
+        self.validated_italics_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        self.validated_italics_inner = ttk.Frame(self.validated_italics_canvas, padding=(0, 0, 8, 0))
+        self.validated_italics_window = self.validated_italics_canvas.create_window((0, 0), window=self.validated_italics_inner, anchor="nw")
+
+        self.validated_italics_inner.bind("<Configure>", self._update_validated_italics_scrollregion)
+        self.validated_italics_canvas.bind("<Configure>", self._resize_validated_italics_inner)
+        self._refresh_validated_italics_panel()
 
         bottom_bar = ttk.Frame(main)
         bottom_bar.grid(row=2, column=0, sticky="ew", pady=(8, 0))
@@ -434,6 +458,103 @@ class PinaxBauhinDataApp(tk.Tk):
 
         self._update_validated_titles_scrollregion()
 
+    def _update_validated_italics_scrollregion(self, event=None):
+        if hasattr(self, "validated_italics_canvas") and self.validated_italics_canvas.winfo_exists():
+            self.validated_italics_canvas.configure(scrollregion=self.validated_italics_canvas.bbox("all"))
+
+    def _resize_validated_italics_inner(self, event):
+        if hasattr(self, "validated_italics_canvas") and self.validated_italics_canvas.winfo_exists():
+            self.validated_italics_canvas.itemconfigure(self.validated_italics_window, width=event.width)
+
+    def _clear_validated_italics_panel(self):
+        if hasattr(self, "validated_italics_inner"):
+            self._clear_children(self.validated_italics_inner)
+
+    def _refresh_validated_italics_panel(self):
+        if not hasattr(self, "validated_italics_inner"):
+            return
+
+        self._clear_validated_italics_panel()
+
+        if not self.validated_italics:
+            ttk.Label(self.validated_italics_inner, text="Aucun texte italique validé", foreground="#6b7280").pack(anchor="w", pady=(0, 8))
+            self._update_validated_italics_scrollregion()
+            return
+
+        self._validated_italics_preview_refs = []
+
+        for italic_item in self.validated_italics:
+            card = ttk.LabelFrame(self.validated_italics_inner, text=italic_item.get("title") or "Texte italique", padding=8)
+            card.pack(fill="x", pady=(0, 8))
+            card.columnconfigure(1, weight=1)
+
+            with Image.open(italic_item["image_path"]) as italic_image:
+                preview = italic_image.convert("RGB")
+                preview.thumbnail((220, 140), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(preview)
+
+            self._validated_italics_preview_refs.append(photo)
+
+            ttk.Label(card, image=photo).grid(row=0, column=0, rowspan=3, sticky="nw", padx=(0, 10))
+            ttk.Label(card, text=italic_item.get("title", "Texte italique"), font=("Helvetica", 11, "bold")).grid(row=0, column=1, sticky="w")
+
+            localisation = italic_item.get("localisation", "")
+            ttk.Label(card, text=f"Localisation : {localisation or '—'}", foreground="#4b5563").grid(row=1, column=1, sticky="w", pady=(4, 0))
+            ttk.Button(card, text="Ouvrir", command=lambda item=italic_item: self._open_validated_italic_detail(item)).grid(row=2, column=1, sticky="w", pady=(8, 0))
+
+        self._update_validated_italics_scrollregion()
+
+    def _build_italic_section(self, parent, item):
+        card = ttk.LabelFrame(parent, text="texte italique", padding=10)
+        card.pack(fill="x", pady=(0, 12))
+        card.columnconfigure(0, weight=1)
+
+        ttk.Label(card, text=item["name"], font=("Helvetica", 11, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        preview = None
+        with Image.open(item["path"]) as italic_image:
+            preview = italic_image.convert("RGB")
+            preview.thumbnail((900, 260), Image.Resampling.LANCZOS)
+
+        photo = ImageTk.PhotoImage(preview)
+        card._photo_ref = photo
+        ttk.Label(card, image=photo).grid(row=1, column=0, sticky="w")
+
+        section = {
+            "kind": "italic",
+            "title": "texte italique",
+            "image_path": item["path"],
+            "source_name": item["name"],
+        }
+        return section
+
+    def _open_validated_italic_detail(self, italic_item):
+        detail_window = tk.Toplevel(self)
+        detail_window.title(italic_item.get("title", "Texte italique"))
+        detail_window.geometry("1000x700")
+        detail_window.columnconfigure(0, weight=1)
+        detail_window.rowconfigure(1, weight=1)
+
+        container = ttk.Frame(detail_window, padding=12)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+
+        ttk.Label(container, text=italic_item.get("title", "Texte italique"), font=("Helvetica", 15, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(container, text=f"Localisation : {italic_item.get('localisation', '')}", font=("Helvetica", 11)).grid(row=1, column=0, sticky="w", pady=(6, 12))
+
+        image_frame = ttk.Frame(detail_window, padding=12)
+        image_frame.grid(row=1, column=0, sticky="nsew")
+        image_frame.columnconfigure(0, weight=1)
+        image_frame.rowconfigure(0, weight=1)
+
+        with Image.open(italic_item["image_path"]) as italic_image:
+            preview = italic_image.convert("RGB")
+            preview.thumbnail((950, 500), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(preview)
+
+        detail_window._photo_ref = photo
+        ttk.Label(image_frame, image=photo).grid(row=0, column=0, sticky="w")
+
     def _format_validated_title_button(self, title_group):
         return title_group.get('title', 'Titre')
 
@@ -457,13 +578,12 @@ class PinaxBauhinDataApp(tk.Tk):
         for item in exported_items:
             normalized_name = item["name"].lower().replace("-", "_")
 
-            if "italic" in normalized_name:
-                italic_text = self._ocr_image_text(item["path"])
-                pending_page_italics.append({"path": item["path"], "text": italic_text})
+            if is_italic_name(normalized_name):
+                pending_page_italics.append({"path": item["path"]})
                 if current_title is not None:
-                    current_title["italics"].append({"path": item["path"], "text": italic_text})
+                    current_title.setdefault("italics", []).append({"path": item["path"]})
                 else:
-                    pending_title_italics.append({"path": item["path"], "text": italic_text})
+                    pending_title_italics.append({"path": item["path"]})
                 continue
 
             if "localisation" in normalized_name:
@@ -508,6 +628,8 @@ class PinaxBauhinDataApp(tk.Tk):
     def _register_validated_title(self, gallery_sections):
         current_group = self.validated_titles[-1] if self.validated_titles else None
         current_title_entry = current_group["hierarchy"][-1] if current_group and current_group.get("hierarchy") else None
+        page_localizations = []  # Initialize the list for localizations
+        italic_items = []  # Initialize the list for italic items
 
         def ensure_current_group(title_text):
             nonlocal current_group, current_title_entry
@@ -570,12 +692,24 @@ class PinaxBauhinDataApp(tk.Tk):
                 continue
 
             kind = section.get("kind")
+            if kind == "italic":
+                italic_record = {
+                    "image_path": section.get("image_path"),
+                    "source_name": section.get("source_name", "texte italique"),
+                    "title": current_group.get("title") if current_group else None,
+                }
+                if current_group is not None:
+                    current_group.setdefault("italics", []).append(italic_record)
+                italic_items.append(italic_record)
+                continue
+
             if kind == "simple":
                 self._sync_ocr_section_rows(section)
                 rows = [row for row in section.get("rows", []) if row.get("text", "").strip()]
                 section_title = section.get("title")
 
                 if section_title == "localisation":
+                    page_localizations.extend(row.get("text", "") for row in rows)
                     continue
 
                 if section_title == "titre" and rows:
@@ -606,7 +740,16 @@ class PinaxBauhinDataApp(tk.Tk):
 
                 append_children(children)
 
+        page_localization_text = "\n".join(text for text in page_localizations if text).strip()
+
+        for italic_item in italic_items:
+            italic_item["localisation"] = page_localization_text
+            if italic_item.get("title") is None and current_group is not None:
+                italic_item["title"] = current_group.get("title")
+            self.validated_italics.append(italic_item)
+
         self._refresh_validated_titles_panel()
+        self._refresh_validated_italics_panel()
 
     def _open_validated_title_detail(self, title_group):
         detail_window = tk.Toplevel(self)
@@ -658,6 +801,30 @@ class PinaxBauhinDataApp(tk.Tk):
                 append(f"{child_type} : {child.get('text', '')}", level=child_indent)
 
             append("", level="level0")
+
+        italics = title_group.get("italics", [])
+        if italics:
+            italics_frame = ttk.LabelFrame(container, text="Textes italiques", padding=10)
+            italics_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+            italics_frame.columnconfigure(1, weight=1)
+
+            for italic_index, italic_item in enumerate(italics, start=1):
+                row_frame = ttk.Frame(italics_frame)
+                row_frame.grid(row=italic_index - 1, column=0, sticky="ew", pady=(0, 8))
+                row_frame.columnconfigure(1, weight=1)
+
+                image_path = italic_item.get("image_path") or italic_item.get("path")
+                if image_path:
+                    with Image.open(image_path) as italic_image:
+                        preview = italic_image.convert("RGB")
+                        preview.thumbnail((220, 140), Image.Resampling.LANCZOS)
+                        photo = ImageTk.PhotoImage(preview)
+
+                    preview_refs.append(photo)
+                    ttk.Label(row_frame, image=photo).grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 10))
+
+                ttk.Label(row_frame, text=f"italique : {italic_item.get('source_name', 'texte italique')}").grid(row=0, column=1, sticky="w")
+                ttk.Label(row_frame, text=f"Localisation : {italic_item.get('localisation', '—')}", foreground="#4b5563").grid(row=1, column=1, sticky="w")
 
         detail_window._preview_refs = preview_refs
 
@@ -712,9 +879,6 @@ class PinaxBauhinDataApp(tk.Tk):
 
             rect_uid = rect.get("uid", index)
             rect_label = rect.get("label", "manual")
-
-            if rect_label == "italic_text":
-                continue
 
             if rect_label == "bicolumn_text":
                 label_counts[rect_label] += 1
@@ -1157,7 +1321,8 @@ class PinaxBauhinDataApp(tk.Tk):
         for item in exported_items:
             normalized_name = item["name"].lower().replace("-", "_")
 
-            if "italic" in normalized_name:
+            if is_italic_name(normalized_name):
+                sections.append(self._build_italic_section(inner_frame, item))
                 continue
 
             if "localisation" in normalized_name:
@@ -1619,6 +1784,7 @@ class PinaxBauhinDataApp(tk.Tk):
             return
 
         rect_id = rect.get("canvas_id")
+
         if rect_id is None or rect_id not in self.rect_items:
             self._redraw_canvas()
             return

@@ -8,6 +8,8 @@ from pathlib import Path
 from PIL import Image, ImageTk
 import pypdfium2 as pdfium
 
+from remove_word_fuzzy import remove_fuzzy_phrase
+from ocr_bicolumns import extract_line_indentation, delete_bars, pytesseract
 from pipeline import pipeline as detect_page_regions
 
 RECT_COLORS = {
@@ -45,7 +47,7 @@ def rect_color(label):
     return RECT_COLORS.get(label_to_internal(label), RECT_COLORS["titles"])
 
 
-class RectangleEditorApp(tk.Tk):
+class PinaxBauhinDataApp(tk.Tk):
     def __init__(self):
         super().__init__()
 
@@ -164,9 +166,30 @@ class RectangleEditorApp(tk.Tk):
 
         bottom_bar = ttk.Frame(main)
         bottom_bar.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        bottom_bar.columnconfigure(7, weight=1)
+        bottom_bar.rowconfigure(0, weight=0)
+        bottom_bar.columnconfigure(3, weight=1)
 
-        ttk.Label(bottom_bar, text="Type:").grid(row=0, column=0, padx=(0, 4))
+        legend_frame = tk.Frame(bottom_bar, bd=0, highlightthickness=0, bg=self.cget("bg"))
+        legend_frame.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 8))
+
+        legend_items = [
+            ("titles", "titre"),
+            ("localisation", "localisation"),
+            ("bicolumn_text", "bi-colonne"),
+            ("italic_text", "italique"),
+        ]
+
+        for index, (rect_label, display_label) in enumerate(legend_items):
+            item_frame = tk.Frame(legend_frame, bd=0, highlightthickness=0, bg=self.cget("bg"))
+            item_frame.pack(side="left", padx=(0 if index == 0 else 18, 0))
+
+            swatch = tk.Canvas(item_frame, width=12, height=12, bd=0, highlightthickness=0, bg=self.cget("bg"))
+            swatch.create_oval(2, 2, 10, 10, fill=RECT_COLORS[rect_label], outline=RECT_COLORS[rect_label])
+            swatch.pack(side="left")
+
+            ttk.Label(item_frame, text=display_label).pack(side="left", padx=(6, 0))
+
+        ttk.Label(bottom_bar, text="Type:").grid(row=1, column=0, padx=(0, 4))
         self.label_selector = ttk.Combobox(
             bottom_bar,
             textvariable=self.new_rect_label,
@@ -174,16 +197,19 @@ class RectangleEditorApp(tk.Tk):
             state="readonly",
             width=16,
         )
-        self.label_selector.grid(row=0, column=1, padx=(0, 12))
+        self.label_selector.grid(row=1, column=1, padx=(0, 12))
         self.label_selector.bind("<<ComboboxSelected>>", self._on_label_selector_change)
 
-        ttk.Button(bottom_bar, text="Ajouter un rectangle", command=self.start_add_rectangle).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(bottom_bar, text="Ajouter un rectangle", command=self.start_add_rectangle).grid(row=1, column=2, padx=(0, 6))
 
         self.validate_border_button_text = tk.StringVar(value="Valider bordure page 0")
-        ttk.Button(bottom_bar, textvariable=self.validate_border_button_text, command=self.validate_current_page_borders).grid(row=0, column=3, padx=(0, 6))
+        ttk.Button(bottom_bar, textvariable=self.validate_border_button_text, command=self.validate_current_page_borders).grid(row=1, column=3, sticky="e", padx=(0, 0))
 
-        self.status_label = ttk.Label(bottom_bar, text="Ouvrez un PDF pour commencer.", width=34, anchor="e")
-        self.status_label.grid(row=0, column=7, sticky="e")
+    def _set_status(self, text):
+        return None
+
+    def _report_error(self, text):
+        print(text)
 
     def _prompt_for_pdf(self):
         pdf_path = filedialog.askopenfilename(
@@ -197,7 +223,7 @@ class RectangleEditorApp(tk.Tk):
         try:
             self.document = pdfium.PdfDocument(pdf_path)
         except Exception as exc:
-            messagebox.showerror("Erreur", f"Impossible d'ouvrir le PDF:\n{exc}")
+            self._report_error(f"Impossible d'ouvrir le PDF: {exc}")
             return
 
         self.pdf_path = pdf_path
@@ -295,8 +321,8 @@ class RectangleEditorApp(tk.Tk):
                         self.current_page_data = []
                         self.canvas_placeholder_text = "Aucune page à afficher"
                         self._redraw_canvas()
-                        self.status_label.config(text=f"Erreur page {page_index + 1}")
-                    messagebox.showerror("Erreur", f"Impossible de charger la page {page_index + 1}:\n{error_message}")
+                        self._set_status(f"Erreur page {page_index + 1}")
+                    self._report_error(f"Impossible de charger la page {page_index + 1}: {error_message}")
         except queue.Empty:
             pass
 
@@ -367,7 +393,6 @@ class RectangleEditorApp(tk.Tk):
     def _update_page_label(self):
         self.page_label.config(text=f"Page {self.current_page + 1 if self.page_count else 0} / {self.page_count}")
         self.validate_border_button_text.set(f"Valider bordure page {self.current_page + 1 if self.page_count else 0}")
-        self.status_label.config(text=f"{len(self.current_page_data)} rectangles sur cette page")
 
     def _make_export_display_name(self, rect_label, count, variant=None):
         display_label = label_to_display(rect_label)
@@ -382,12 +407,12 @@ class RectangleEditorApp(tk.Tk):
 
     def _export_current_page_rectangles(self):
         if self.current_image is None:
-            messagebox.showerror("Debug", "Aucune page affichée à enregistrer.")
+            self._report_error("Aucune page affichée à enregistrer.")
             return []
 
         rectangles = self.current_page_data or []
         if not rectangles:
-            messagebox.showerror("Debug", "Aucun rectangle à enregistrer sur cette page.")
+            self._report_error("Aucun rectangle à enregistrer sur cette page.")
             return []
 
         if self.pdf_path:
@@ -415,6 +440,9 @@ class RectangleEditorApp(tk.Tk):
             rect_uid = rect.get("uid", index)
             rect_label = rect.get("label", "manual")
 
+            if rect_label == "italic_text":
+                continue
+
             if rect_label == "bicolumn_text":
                 label_counts[rect_label] += 1
                 rect_count = label_counts[rect_label]
@@ -441,10 +469,400 @@ class RectangleEditorApp(tk.Tk):
             saved_items.append({"path": export_path, "name": display_name})
 
         if not saved_items:
-            messagebox.showerror("Debug", "Aucun rectangle valide n'a pu être enregistré.")
+            self._report_error("Aucun rectangle valide n'a pu être enregistré.")
             return []
 
         return saved_items
+
+    def _normalize_ocr_text(self, text):
+        cleaned = delete_bars(text or "")
+        cleaned = "\n".join(line.rstrip() for line in cleaned.splitlines())
+        return cleaned.strip()
+
+    def _strip_first_word(self, text):
+        lines = (text or "").splitlines()
+        if not lines:
+            return ""
+
+        first_line = lines[0].lstrip()
+        parts = first_line.split(maxsplit=1)
+        if len(parts) < 2:
+            cleaned_lines = lines[1:]
+        else:
+            cleaned_lines = [parts[1], *lines[1:]]
+
+        return "\n".join(cleaned_lines).strip()
+
+    def _ocr_image_text(self, image_path):
+        with Image.open(image_path) as image:
+            try:
+                raw_text = pytesseract.image_to_string(image, lang="lat")
+            except Exception:
+                raw_text = pytesseract.image_to_string(image)
+        return self._normalize_ocr_text(raw_text)
+
+    def _ocr_title_text(self, image_path):
+        raw_text = self._ocr_image_text(image_path)
+        fuzzy_text = remove_fuzzy_phrase(
+            raw_text,
+            ["EJUSQUE SPECIES", "ET EJUS SPECIES"],
+        )
+        return raw_text, fuzzy_text
+
+    def _ocr_bicolumn_blocks(self, image_path):
+        with Image.open(image_path) as image:
+            analysis = extract_line_indentation(image)
+
+        if not analysis or not analysis.get("blocks"):
+            return []
+
+        blocks = []
+        for block in analysis["blocks"]:
+            if block.get("type") == "commentaire":
+                continue
+
+            text = self._normalize_ocr_text(block.get("text", ""))
+            if block.get("type") == "variete":
+                text = self._strip_first_word(text)
+            if not text:
+                continue
+
+            blocks.append(
+                {
+                    "type": block.get("type", "taxon"),
+                    "text": text,
+                }
+            )
+
+        return blocks
+
+    def _create_text_widget(self, parent, text="", height=3):
+        text_widget = tk.Text(parent, height=height, wrap="word", relief="solid", borderwidth=1)
+        text_widget.insert("1.0", text)
+        return text_widget
+
+    def _ocr_type_display(self, ocr_type):
+        return {
+            "espece": "espèce",
+            "variete": "variété",
+            "taxon": "taxon",
+            "titre": "titre",
+            "localisation": "localisation",
+        }.get(ocr_type, ocr_type)
+
+    def _ocr_type_with_bullet(self, ocr_type):
+        return f"• {self._ocr_type_display(ocr_type)}"
+
+    def _ocr_type_internal(self, display_type):
+        return {
+            "espèce": "espece",
+            "variété": "variete",
+            "taxon": "taxon",
+            "titre": "titre",
+            "localisation": "localisation",
+        }.get(display_type, display_type)
+
+    def _ocr_row_indent(self, row_type):
+        return {
+            "espece": 0,
+            "variete": 24,
+            "taxon": 48,
+            "titre": 0,
+            "localisation": 0,
+        }.get(row_type, 0)
+
+    def _clear_children(self, widget):
+        for child in widget.winfo_children():
+            child.destroy()
+
+    def _sync_ocr_section_rows(self, section):
+        for row in section["rows"]:
+            text_widget = row.get("text_widget")
+            if text_widget is not None and text_widget.winfo_exists():
+                row["text"] = text_widget.get("1.0", "end-1c").strip()
+
+            type_var = row.get("type_var")
+            if type_var is not None:
+                row["type"] = self._ocr_type_internal(type_var.get())
+
+    def _insert_ocr_row(self, section, index, row_type=None, text=""):
+        self._sync_ocr_section_rows(section)
+
+        default_type = row_type or section.get("fixed_type") or "taxon"
+        if section.get("kind") == "bicolumn":
+            default_type = self._ocr_type_internal(self._ocr_type_display(default_type))
+
+        section["rows"].insert(
+            max(0, min(index, len(section["rows"]))),
+            {
+                "type": default_type,
+                "text": text,
+            },
+        )
+        self._render_ocr_section(section)
+
+    def _delete_ocr_row(self, section, index):
+        self._sync_ocr_section_rows(section)
+        if 0 <= index < len(section["rows"]):
+            row = section["rows"][index]
+            row_type = self._ocr_type_display(row.get("type", "taxon"))
+            row_text = row.get("text", "").strip()
+            confirmation_text = f"Êtes-vous sûr de vouloir supprimer {row_type} :\n\n{row_text or '[contenu vide]'}"
+
+            if not messagebox.askyesno("Confirmation de suppression", confirmation_text):
+                return
+
+            section["rows"].pop(index)
+        self._render_ocr_section(section)
+
+    def _should_show_ocr_add_button(self, section, index):
+        rows = section.get("rows", [])
+        if not (0 <= index < len(rows)):
+            return False
+
+        row_type = rows[index].get("type")
+        if row_type != "taxon":
+            return True
+
+        next_row = rows[index + 1] if index + 1 < len(rows) else None
+        return next_row is None or next_row.get("type") != "taxon"
+
+    def _create_action_button(self, parent, text, bg, active_bg, command):
+        container = tk.Frame(parent, bg=bg, width=48, height=28, bd=0, highlightthickness=0)
+        container.pack_propagate(False)
+
+        button = tk.Label(
+            container,
+            text=text,
+            fg="white",
+            bg=bg,
+            bd=0,
+            relief="flat",
+            cursor="hand2",
+            font=("Helvetica", 16, "bold"),
+        )
+        button.pack(fill="both", expand=True)
+
+        def set_active(state_active):
+            color = active_bg if state_active else bg
+            container.configure(bg=color)
+            button.configure(bg=color)
+
+        container.bind("<Button-1>", lambda event: command())
+        container.bind("<Enter>", lambda event: set_active(True))
+        container.bind("<Leave>", lambda event: set_active(False))
+        button.bind("<Button-1>", lambda event: command())
+        button.bind("<Enter>", lambda event: set_active(True))
+        button.bind("<Leave>", lambda event: set_active(False))
+        return container
+
+    def _render_ocr_section(self, section):
+        self._clear_children(section["rows_frame"])
+
+        rows = section["rows"]
+        if section.get("kind") == "bicolumn":
+            top_insert = ttk.Frame(section["rows_frame"])
+            top_insert.pack(fill="x", pady=(0, 8), padx=(8, 8))
+            ttk.Label(top_insert, text="", width=14, anchor="w").pack(side="left", padx=(0, 6))
+            self._create_action_button(
+                top_insert,
+                text="+",
+                bg="#2ca02c",
+                active_bg="#228b22",
+                command=lambda s=section: self._insert_ocr_row(s, 0),
+            ).pack(side="left")
+
+        if not rows:
+            ttk.Label(section["rows_frame"], text="Aucune zone", foreground="#6b7280").pack(anchor="w", pady=(0, 8))
+
+        for index, row in enumerate(rows):
+            row_frame = ttk.Frame(section["rows_frame"])
+            row_frame.pack(fill="x", pady=(0, 8), padx=(8, 8))
+
+            indent = self._ocr_row_indent(row.get("type")) if section.get("kind") == "bicolumn" else 0
+            row_inner = ttk.Frame(row_frame)
+            row_inner.pack(fill="x", padx=(indent, 0))
+            row_inner.columnconfigure(0, weight=0)
+            row_inner.columnconfigure(1, weight=1)
+            row_inner.columnconfigure(2, weight=0)
+
+            header = ttk.Frame(row_inner)
+            header.grid(row=0, column=0, sticky="w")
+            row_inner.columnconfigure(0, weight=0)
+
+            if section.get("kind") == "bicolumn":
+                type_var = tk.StringVar(value=self._ocr_type_display(row.get("type", "taxon")))
+                type_selector = ttk.Combobox(
+                    header,
+                    textvariable=type_var,
+                    values=["espèce", "variété", "taxon"],
+                    state="readonly",
+                    width=12,
+                )
+                ttk.Label(header, text="•", width=2, anchor="w").pack(side="left", padx=(0, 2))
+                type_selector.pack(side="left", padx=(0, 6))
+                row["type_var"] = type_var
+                type_selector.bind(
+                    "<<ComboboxSelected>>",
+                    lambda event, s=section: (self._sync_ocr_section_rows(s), self._render_ocr_section(s)),
+                )
+            else:
+                ttk.Label(header, text=self._ocr_type_with_bullet(section.get("fixed_type_display", section["title"])), width=14, anchor="w").pack(side="left", padx=(0, 6))
+                row["type_var"] = None
+
+            text_widget = self._create_text_widget(row_inner, row.get("text", ""), height=3 if section.get("kind") == "bicolumn" else 4)
+            text_widget.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+            row["text_widget"] = text_widget
+
+            if section.get("kind") == "bicolumn":
+                buttons = ttk.Frame(row_inner)
+                buttons.grid(row=0, column=2, sticky="e", padx=(6, 0))
+                self._create_action_button(
+                    buttons,
+                    text="-",
+                    bg="#d9534f",
+                    active_bg="#c9302c",
+                    command=lambda s=section, i=index: self._delete_ocr_row(s, i),
+                ).pack(side="top", anchor="e")
+                if self._should_show_ocr_add_button(section, index):
+                    self._create_action_button(
+                        buttons,
+                        text="+",
+                        bg="#2ca02c",
+                        active_bg="#228b22",
+                        command=lambda s=section, i=index + 1: self._insert_ocr_row(s, i),
+                    ).pack(side="top", anchor="e", pady=(4, 0))
+
+    def _build_simple_ocr_section(self, parent, title, ocr_text):
+        card = ttk.LabelFrame(parent, text=title, padding=10)
+        card.pack(fill="x", pady=(0, 12))
+        card.columnconfigure(0, weight=1)
+
+        rows_frame = ttk.Frame(card)
+        rows_frame.grid(row=0, column=0, sticky="ew")
+        section = {
+            "kind": "simple",
+            "title": title,
+            "fixed_type": self._ocr_type_internal(title),
+            "fixed_type_display": title,
+            "rows_frame": rows_frame,
+            "rows": [{"type": self._ocr_type_internal(title), "text": ocr_text}],
+            "add_button_label": "+ zone de texte",
+        }
+        self._render_ocr_section(section)
+        return section
+
+    def _build_bicolumn_section(self, parent, title, left_item, right_item):
+        card = ttk.LabelFrame(parent, text=title, padding=10)
+        card.pack(fill="x", pady=(0, 12))
+        card.columnconfigure(0, weight=1)
+
+        left_frame = ttk.Frame(card)
+        left_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+        right_frame = ttk.Frame(card)
+        right_frame.grid(row=1, column=0, sticky="nsew")
+
+        def populate_side(side_frame, side_label, item):
+            side_frame.columnconfigure(0, weight=1)
+            ttk.Label(side_frame, text=side_label, font=("Helvetica", 11, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+            rows_frame = ttk.Frame(side_frame)
+            rows_frame.grid(row=1, column=0, sticky="nsew")
+
+            blocks = self._ocr_bicolumn_blocks(item["path"])
+            rows = [
+                {
+                    "type": block.get("type", "taxon"),
+                    "text": block.get("text", ""),
+                }
+                for block in blocks
+            ]
+
+            section = {
+                "kind": "bicolumn",
+                "title": side_label,
+                "rows_frame": rows_frame,
+                "rows": rows,
+                "add_button_label": "+ zone de texte",
+            }
+            self._render_ocr_section(section)
+
+        if left_item:
+            populate_side(left_frame, f"gauche - {left_item['name']}", left_item)
+        else:
+            ttk.Label(left_frame, text="gauche", font=("Helvetica", 11, "bold")).grid(row=0, column=0, sticky="w")
+
+        if right_item:
+            populate_side(right_frame, f"droite - {right_item['name']}", right_item)
+        else:
+            ttk.Label(right_frame, text="droite", font=("Helvetica", 11, "bold")).grid(row=0, column=0, sticky="w")
+
+    def _build_gallery_ocr_panel(self, parent, exported_items):
+        container = ttk.Frame(parent)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+        container.columnconfigure(1, weight=0)
+
+        scroll_canvas = tk.Canvas(container, highlightthickness=0, bg="#ffffff")
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=scroll_canvas.yview)
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        scroll_canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        inner_frame = ttk.Frame(scroll_canvas, padding=(0, 0, 8, 0))
+        inner_window = scroll_canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+
+        def update_scrollregion(event=None):
+            scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all"))
+
+        def resize_inner(event):
+            scroll_canvas.itemconfigure(inner_window, width=event.width)
+
+        inner_frame.bind("<Configure>", update_scrollregion)
+        scroll_canvas.bind("<Configure>", resize_inner)
+
+        pending_bicolumn_left = None
+
+        for item in exported_items:
+            normalized_name = item["name"].lower().replace("-", "_")
+
+            if "italic" in normalized_name:
+                continue
+
+            if "localisation" in normalized_name:
+                ocr_text = self._ocr_image_text(item["path"])
+                self._build_simple_ocr_section(inner_frame, "localisation", ocr_text)
+                continue
+
+            if normalized_name.startswith("titre"):
+                raw_title_text, fuzzy_title_text = self._ocr_title_text(item["path"])
+                self._build_simple_ocr_section(inner_frame, "titre", fuzzy_title_text)
+                if fuzzy_title_text != raw_title_text:
+                    print("Fuzzy titre:")
+                    print(fuzzy_title_text)
+                continue
+
+            if "bicolonne" in normalized_name or "bi_colonne" in normalized_name:
+                if normalized_name.endswith("gauche"):
+                    pending_bicolumn_left = item
+                    continue
+
+                if normalized_name.endswith("droite"):
+                    self._build_bicolumn_section(inner_frame, "bicolonne", pending_bicolumn_left, item)
+                    pending_bicolumn_left = None
+                    continue
+
+                self._build_bicolumn_section(inner_frame, "bicolonne", item, None)
+                continue
+
+            ocr_text = self._ocr_image_text(item["path"])
+            self._build_simple_ocr_section(inner_frame, item["name"], ocr_text)
+
+        if pending_bicolumn_left is not None:
+            self._build_bicolumn_section(inner_frame, "bicolonne", pending_bicolumn_left, None)
+
+        return container
 
     def _open_rectangles_gallery(self, exported_items):
         if self.gallery_window is not None and self.gallery_window.winfo_exists():
@@ -488,6 +906,10 @@ class RectangleEditorApp(tk.Tk):
         content_frame.bind("<Configure>", _update_scrollregion)
         canvas.bind("<Configure>", _resize_content)
 
+        gallery_window.update_idletasks()
+        usable_left_width = min(scroll_container.winfo_width(), canvas.winfo_width(), left_panel.winfo_width())
+        left_preview_width = max(int(usable_left_width * 0.72), 320)
+
         photo_refs = []
         for item in exported_items:
             card = ttk.Frame(content_frame, padding=10, relief="solid")
@@ -497,7 +919,16 @@ class RectangleEditorApp(tk.Tk):
 
             with Image.open(item["path"]) as image:
                 preview = image.convert("RGB")
-                preview.thumbnail((760, 240), Image.Resampling.LANCZOS)
+                normalized_name = item["name"].lower().replace("-", "_")
+                if (
+                    "bicolonne" in normalized_name
+                    or "bi_colonne" in normalized_name
+                    or normalized_name.startswith("titre")
+                    or "localisation" in normalized_name
+                ):
+                    preview.thumbnail((left_preview_width, 4000), Image.Resampling.LANCZOS)
+                else:
+                    preview.thumbnail((760, 240), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(preview)
 
             photo_refs.append(photo)
@@ -510,7 +941,7 @@ class RectangleEditorApp(tk.Tk):
         right_panel.columnconfigure(0, weight=1)
         right_panel.rowconfigure(0, weight=1)
 
-        ttk.Frame(right_panel).grid(row=0, column=0, sticky="nsew")
+        self._build_gallery_ocr_panel(right_panel, exported_items)
 
     def validate_current_page_borders(self):
         exported_items = self._export_current_page_rectangles()
@@ -519,7 +950,6 @@ class RectangleEditorApp(tk.Tk):
 
         self.gallery_export_items = exported_items
         self._open_rectangles_gallery(exported_items)
-        self.status_label.config(text=f"{len(exported_items)} PNG générés")
 
     def prev_page(self):
         if self.page_count and self.current_page > 0:
@@ -536,12 +966,12 @@ class RectangleEditorApp(tk.Tk):
         try:
             page_number = int(self.page_jump_var.get().strip())
         except ValueError:
-            messagebox.showerror("Erreur", "Entrez un numero de page valide.")
+            self._report_error("Entrez un numero de page valide.")
             self.page_jump_var.set(str(self.current_page + 1))
             return
 
         if not (1 <= page_number <= self.page_count):
-            messagebox.showerror("Erreur", f"Entrez un numero entre 1 et {self.page_count}.")
+            self._report_error(f"Entrez un numero entre 1 et {self.page_count}.")
             self.page_jump_var.set(str(self.current_page + 1))
             return
 
@@ -916,7 +1346,6 @@ class RectangleEditorApp(tk.Tk):
             return
         self._clear_interaction_state()
         self.action_mode = "add"
-        self.status_label.config(text="Cliquez et glissez pour dessiner un rectangle")
 
     def _cancel_action(self, event=None):
         if self.action_mode == "add" and self.temp_rect_id is not None:
@@ -965,7 +1394,6 @@ class RectangleEditorApp(tk.Tk):
             self.action_mode = "separator"
             self.drag_start_image = (image_x, image_y)
             self.drag_anchor_rect = separator_rect.copy()
-            self.status_label.config(text="Glissez le trait pour corriger la séparation")
             return
 
         rect = self._find_rect_at_canvas_point(canvas_x, canvas_y)
@@ -1121,16 +1549,15 @@ class RectangleEditorApp(tk.Tk):
     def validate_and_print_json(self):
         payload = self._build_rectangle_payload()
         print(json.dumps(payload, indent=2, ensure_ascii=False))
-        messagebox.showinfo("Validation", "JSON imprimé dans la console.")
 
     def save_rectangles_debug(self):
         exported_items = self._export_current_page_rectangles()
         if not exported_items:
             return
 
-        messagebox.showinfo("Debug", "Rectangles enregistrés dans:\n" + "\n".join(str(item["path"]) for item in exported_items))
+        print("Rectangles enregistrés dans:\n" + "\n".join(str(item["path"]) for item in exported_items))
 
 
 if __name__ == "__main__":
-    app = RectangleEditorApp()
+    app = PinaxBauhinDataApp()
     app.mainloop()

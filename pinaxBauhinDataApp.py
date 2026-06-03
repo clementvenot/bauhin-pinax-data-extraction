@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
 import pypdfium2 as pdfium
 
 from remove_word_fuzzy import remove_fuzzy_phrase
@@ -87,6 +87,8 @@ class PinaxBauhinDataApp(tk.Tk):
 
         self.gallery_window = None
         self.gallery_export_items = []
+        self.validated_titles = []
+        self._validated_title_counter = 1
 
         self.view_scale = 1.0
         self.offset_x = 0
@@ -154,15 +156,25 @@ class PinaxBauhinDataApp(tk.Tk):
         right_panel.columnconfigure(0, weight=1)
         right_panel.rowconfigure(1, weight=1)
 
-        ttk.Button(right_panel, text="OCR", command=lambda: None).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(right_panel, text="Titres validés", font=("Helvetica", 13, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 8))
 
-        ttk.Label(
-            right_panel,
-            text="Panneau droit vide pour plus tard",
-            foreground="#6b7280",
-            anchor="center",
-            justify="center",
-        ).grid(row=1, column=0, sticky="nsew")
+        titles_container = ttk.Frame(right_panel)
+        titles_container.grid(row=1, column=0, sticky="nsew")
+        titles_container.columnconfigure(0, weight=1)
+        titles_container.rowconfigure(0, weight=1)
+
+        self.validated_titles_canvas = tk.Canvas(titles_container, highlightthickness=0, bg="#ffffff")
+        self.validated_titles_scrollbar = ttk.Scrollbar(titles_container, orient="vertical", command=self.validated_titles_canvas.yview)
+        self.validated_titles_canvas.configure(yscrollcommand=self.validated_titles_scrollbar.set)
+        self.validated_titles_canvas.grid(row=0, column=0, sticky="nsew")
+        self.validated_titles_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        self.validated_titles_inner = ttk.Frame(self.validated_titles_canvas, padding=(0, 0, 8, 0))
+        self.validated_titles_window = self.validated_titles_canvas.create_window((0, 0), window=self.validated_titles_inner, anchor="nw")
+
+        self.validated_titles_inner.bind("<Configure>", self._update_validated_titles_scrollregion)
+        self.validated_titles_canvas.bind("<Configure>", self._resize_validated_titles_inner)
+        self._refresh_validated_titles_panel()
 
         bottom_bar = ttk.Frame(main)
         bottom_bar.grid(row=2, column=0, sticky="ew", pady=(8, 0))
@@ -259,6 +271,7 @@ class PinaxBauhinDataApp(tk.Tk):
             args=(page_index,),
             daemon=True,
         )
+        sections = []
         worker.start()
 
         if show_when_ready and page_index == self.current_page:
@@ -312,7 +325,6 @@ class PinaxBauhinDataApp(tk.Tk):
 
                     if page_index == self.current_page:
                         self._apply_loaded_page(page_index)
-
                 elif event == "page_error":
                     _, page_index, error_message = message
                     self.loading_pages.discard(page_index)
@@ -389,6 +401,267 @@ class PinaxBauhinDataApp(tk.Tk):
             self.page_annotations[self.current_page] = [rect.copy() for rect in self.current_page_data]
             if self.current_page in self.page_cache:
                 self.page_cache[self.current_page]["annotations"] = self.page_annotations[self.current_page]
+
+    def _update_validated_titles_scrollregion(self, event=None):
+        if hasattr(self, "validated_titles_canvas") and self.validated_titles_canvas.winfo_exists():
+            self.validated_titles_canvas.configure(scrollregion=self.validated_titles_canvas.bbox("all"))
+
+    def _resize_validated_titles_inner(self, event):
+        if hasattr(self, "validated_titles_canvas") and self.validated_titles_canvas.winfo_exists():
+            self.validated_titles_canvas.itemconfigure(self.validated_titles_window, width=event.width)
+
+    def _clear_validated_titles_panel(self):
+        self._clear_children(self.validated_titles_inner)
+
+    def _refresh_validated_titles_panel(self):
+        if not hasattr(self, "validated_titles_inner"):
+            return
+
+        self._clear_validated_titles_panel()
+
+        if not self.validated_titles:
+            ttk.Label(self.validated_titles_inner, text="Aucun titre validé", foreground="#6b7280").pack(anchor="w", pady=(0, 8))
+            self._update_validated_titles_scrollregion()
+            return
+
+        for title_group in self.validated_titles:
+            button = ttk.Button(
+                self.validated_titles_inner,
+                text=self._format_validated_title_button(title_group),
+                command=lambda group=title_group: self._open_validated_title_detail(group),
+            )
+            button.pack(fill="x", pady=(0, 6))
+
+        self._update_validated_titles_scrollregion()
+
+    def _format_validated_title_button(self, title_group):
+        return title_group.get('title', 'Titre')
+
+    def _extract_title_group_name(self, exported_items):
+        for item in exported_items:
+            normalized_name = item["name"].lower().replace("-", "_")
+            if normalized_name.startswith("titre"):
+                _, fuzzy_title_text = self._ocr_title_text(item["path"])
+                cleaned_title = " ".join((fuzzy_title_text or item["name"]).split())
+                if cleaned_title:
+                    return cleaned_title
+        return None
+
+    def _build_title_hierarchy(self, exported_items):
+        hierarchy = []
+        pending_page_localisations = []
+        pending_page_italics = []
+        pending_title_italics = []
+        current_title = None
+
+        for item in exported_items:
+            normalized_name = item["name"].lower().replace("-", "_")
+
+            if "italic" in normalized_name:
+                italic_text = self._ocr_image_text(item["path"])
+                pending_page_italics.append({"path": item["path"], "text": italic_text})
+                if current_title is not None:
+                    current_title["italics"].append({"path": item["path"], "text": italic_text})
+                else:
+                    pending_title_italics.append({"path": item["path"], "text": italic_text})
+                continue
+
+            if "localisation" in normalized_name:
+                pending_page_localisations.append(self._ocr_image_text(item["path"]))
+                continue
+
+            if normalized_name.startswith("titre"):
+                raw_title_text, fuzzy_title_text = self._ocr_title_text(item["path"])
+                current_title = {
+                    "type": "title",
+                    "label": "titre",
+                    "text": fuzzy_title_text or raw_title_text or item["name"],
+                    "italics": pending_title_italics[:],
+                    "children": [],
+                }
+                hierarchy.append(current_title)
+                pending_title_italics = []
+                continue
+
+            if ("bicolonne" in normalized_name or "bi_colonne" in normalized_name) and hierarchy:
+                current_title = hierarchy[-1]
+                for block in self._ocr_bicolumn_blocks(item["path"]):
+                    current_title["children"].append(
+                        {
+                            "type": self._ocr_type_display(block.get("type", "taxon")),
+                            "text": block.get("text", ""),
+                        }
+                    )
+                continue
+
+            if hierarchy:
+                current_title = hierarchy[-1]
+                current_title["children"].append(
+                    {
+                        "type": "taxon",
+                        "text": self._ocr_image_text(item["path"]),
+                    }
+                )
+
+        return {"titles": hierarchy, "localisations": pending_page_localisations, "italics": pending_page_italics}
+
+    def _register_validated_title(self, gallery_sections):
+        current_group = self.validated_titles[-1] if self.validated_titles else None
+        current_title_entry = current_group["hierarchy"][-1] if current_group and current_group.get("hierarchy") else None
+
+        def ensure_current_group(title_text):
+            nonlocal current_group, current_title_entry
+
+            title_text = " ".join((title_text or "").split())
+            if not title_text:
+                title_text = f"Titre validé {self._validated_title_counter}"
+
+            current_group = {
+                "id": self._validated_title_counter,
+                "title": title_text,
+                "pages": [],
+                "hierarchy": [
+                    {
+                        "type": "title",
+                        "label": "titre",
+                        "text": title_text,
+                        "children": [],
+                    }
+                ],
+            }
+            self._validated_title_counter += 1
+            self.validated_titles.append(current_group)
+            current_title_entry = current_group["hierarchy"][0]
+            return current_group, current_title_entry
+
+        def ensure_page_entry(group):
+            page_key = self.current_page
+            pages = group.setdefault("pages", [])
+            if not pages or pages[-1].get("page_index") != page_key:
+                pages.append(
+                    {
+                        "page_index": self.current_page,
+                        "page_number": self.current_page + 1,
+                        "items": gallery_sections,
+                    }
+                )
+            return pages[-1]
+
+        def append_children(children):
+            nonlocal current_group, current_title_entry
+            if not children:
+                return
+
+            if current_group is None:
+                if self.validated_titles:
+                    current_group = self.validated_titles[-1]
+                    current_title_entry = current_group["hierarchy"][-1] if current_group.get("hierarchy") else None
+                else:
+                    return
+
+            if current_title_entry is None:
+                current_group, current_title_entry = ensure_current_group(f"Titre validé {self._validated_title_counter}")
+
+            current_title_entry.setdefault("children", []).extend(children)
+            ensure_page_entry(current_group)
+
+        for section in gallery_sections or []:
+            if section is None:
+                continue
+
+            kind = section.get("kind")
+            if kind == "simple":
+                self._sync_ocr_section_rows(section)
+                rows = [row for row in section.get("rows", []) if row.get("text", "").strip()]
+                section_title = section.get("title")
+
+                if section_title == "localisation":
+                    continue
+
+                if section_title == "titre" and rows:
+                    title_text = rows[0].get("text", "")
+                    current_group, current_title_entry = ensure_current_group(title_text)
+                    ensure_page_entry(current_group)
+                    continue
+
+                children = [
+                    {
+                        "type": self._ocr_type_display(section.get("fixed_type", "taxon")),
+                        "text": "\n".join(row.get("text", "") for row in rows),
+                    }
+                ] if rows else []
+                append_children(children)
+                continue
+
+            if kind == "bicolumn":
+                children = []
+                for side in section.get("sides", []):
+                    if side is None:
+                        continue
+                    self._sync_ocr_section_rows(side)
+                    for row in side.get("rows", []):
+                        row_text = row.get("text", "").strip()
+                        if row_text:
+                            children.append({"type": self._ocr_type_display(row.get("type", "taxon")), "text": row_text})
+
+                append_children(children)
+
+        self._refresh_validated_titles_panel()
+
+    def _open_validated_title_detail(self, title_group):
+        detail_window = tk.Toplevel(self)
+        detail_window.title(title_group.get("title", "Titre validé"))
+        detail_window.geometry("1100x800")
+        detail_window.columnconfigure(0, weight=1)
+        detail_window.rowconfigure(0, weight=1)
+
+        container = ttk.Frame(detail_window, padding=12)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+
+        ttk.Label(container, text=title_group.get("title", "Titre validé"), font=("Helvetica", 15, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        text = tk.Text(container, wrap="word")
+        text.grid(row=1, column=0, sticky="nsew")
+        text.tag_configure("level0", lmargin1=0, lmargin2=0)
+        text.tag_configure("level1", lmargin1=28, lmargin2=28)
+        text.tag_configure("level2", lmargin1=56, lmargin2=56)
+        text.tag_configure("level3", lmargin1=84, lmargin2=84)
+
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=text.yview)
+        scrollbar.grid(row=1, column=1, sticky="ns")
+        text.configure(yscrollcommand=scrollbar.set)
+
+        def append(line, level="level0"):
+            text.insert("end", f"{line}\n", level)
+
+        preview_refs = []
+
+        pages = title_group.get("pages", [])
+        if pages:
+            page_numbers = ", ".join(str(page.get("page_number", "?")) for page in pages)
+            append(f"pages : {page_numbers}", level="level1")
+
+        for title in title_group.get("hierarchy", []):
+            append(f"titre : {title.get('text', '')}", level="level0")
+
+            for child in title.get("children", []):
+                child_type = child.get("type", "taxon")
+                child_indent = {
+                    "espèce": "level1",
+                    "espece": "level1",
+                    "variété": "level2",
+                    "variete": "level2",
+                    "taxon": "level3",
+                }.get(child_type, "level3")
+                append(f"{child_type} : {child.get('text', '')}", level=child_indent)
+
+            append("", level="level0")
+
+        detail_window._preview_refs = preview_refs
+
+        text.configure(state="disabled")
 
     def _update_page_label(self):
         self.page_label.config(text=f"Page {self.current_page + 1 if self.page_count else 0} / {self.page_count}")
@@ -501,8 +774,49 @@ class PinaxBauhinDataApp(tk.Tk):
                 raw_text = pytesseract.image_to_string(image)
         return self._normalize_ocr_text(raw_text)
 
+    def _ocr_title_with_tesseract_variants(self, image):
+        variants = [
+            image,
+            ImageOps.autocontrast(image.convert("L")),
+            ImageOps.autocontrast(image.convert("L")).resize(
+                (max(1, image.width * 2), max(1, image.height * 2)),
+                Image.Resampling.LANCZOS,
+            ),
+            ImageOps.autocontrast(image.convert("L")).resize(
+                (max(1, image.width * 3), max(1, image.height * 3)),
+                Image.Resampling.LANCZOS,
+            ),
+        ]
+
+        configs = [
+            "--oem 3 --psm 6",
+            "--oem 3 --psm 7",
+            "--oem 3 --psm 11",
+        ]
+
+        for variant in variants:
+            for config in configs:
+                try:
+                    raw_text = pytesseract.image_to_string(variant, lang="lat", config=config)
+                except Exception:
+                    try:
+                        raw_text = pytesseract.image_to_string(variant, config=config)
+                    except Exception:
+                        continue
+
+                cleaned_text = self._normalize_ocr_text(raw_text)
+                if cleaned_text:
+                    return cleaned_text
+
+        return ""
+
     def _ocr_title_text(self, image_path):
-        raw_text = self._ocr_image_text(image_path)
+        with Image.open(image_path) as image:
+            raw_text = self._ocr_title_with_tesseract_variants(image)
+
+        if not raw_text:
+            raw_text = self._ocr_image_text(image_path)
+
         fuzzy_text = remove_fuzzy_phrase(
             raw_text,
             ["EJUSQUE SPECIES", "ET EJUS SPECIES"],
@@ -548,6 +862,7 @@ class PinaxBauhinDataApp(tk.Tk):
             "taxon": "taxon",
             "titre": "titre",
             "localisation": "localisation",
+            "entry": "taxon",
         }.get(ocr_type, ocr_type)
 
     def _ocr_type_with_bullet(self, ocr_type):
@@ -565,10 +880,13 @@ class PinaxBauhinDataApp(tk.Tk):
     def _ocr_row_indent(self, row_type):
         return {
             "espece": 0,
-            "variete": 24,
-            "taxon": 48,
+            "espèce": 0,
+            "variete": 28,
+            "variété": 28,
+            "taxon": 56,
             "titre": 0,
             "localisation": 0,
+            "entry": 56,
         }.get(row_type, 0)
 
     def _clear_children(self, widget):
@@ -757,6 +1075,12 @@ class PinaxBauhinDataApp(tk.Tk):
         card.pack(fill="x", pady=(0, 12))
         card.columnconfigure(0, weight=1)
 
+        section = {
+            "kind": "bicolumn",
+            "title": title,
+            "sides": [],
+        }
+
         left_frame = ttk.Frame(card)
         left_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
         right_frame = ttk.Frame(card)
@@ -786,16 +1110,21 @@ class PinaxBauhinDataApp(tk.Tk):
                 "add_button_label": "+ zone de texte",
             }
             self._render_ocr_section(section)
+            return section
 
         if left_item:
-            populate_side(left_frame, f"gauche - {left_item['name']}", left_item)
+            section["sides"].append(populate_side(left_frame, f"gauche - {left_item['name']}", left_item))
         else:
             ttk.Label(left_frame, text="gauche", font=("Helvetica", 11, "bold")).grid(row=0, column=0, sticky="w")
+            section["sides"].append(None)
 
         if right_item:
-            populate_side(right_frame, f"droite - {right_item['name']}", right_item)
+            section["sides"].append(populate_side(right_frame, f"droite - {right_item['name']}", right_item))
         else:
             ttk.Label(right_frame, text="droite", font=("Helvetica", 11, "bold")).grid(row=0, column=0, sticky="w")
+            section["sides"].append(None)
+
+        return section
 
     def _build_gallery_ocr_panel(self, parent, exported_items):
         container = ttk.Frame(parent)
@@ -803,6 +1132,7 @@ class PinaxBauhinDataApp(tk.Tk):
         container.rowconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
         container.columnconfigure(1, weight=0)
+        sections = []
 
         scroll_canvas = tk.Canvas(container, highlightthickness=0, bg="#ffffff")
         scrollbar = ttk.Scrollbar(container, orient="vertical", command=scroll_canvas.yview)
@@ -832,12 +1162,12 @@ class PinaxBauhinDataApp(tk.Tk):
 
             if "localisation" in normalized_name:
                 ocr_text = self._ocr_image_text(item["path"])
-                self._build_simple_ocr_section(inner_frame, "localisation", ocr_text)
+                sections.append(self._build_simple_ocr_section(inner_frame, "localisation", ocr_text))
                 continue
 
             if normalized_name.startswith("titre"):
                 raw_title_text, fuzzy_title_text = self._ocr_title_text(item["path"])
-                self._build_simple_ocr_section(inner_frame, "titre", fuzzy_title_text)
+                sections.append(self._build_simple_ocr_section(inner_frame, "titre", fuzzy_title_text))
                 if fuzzy_title_text != raw_title_text:
                     print("Fuzzy titre:")
                     print(fuzzy_title_text)
@@ -849,20 +1179,93 @@ class PinaxBauhinDataApp(tk.Tk):
                     continue
 
                 if normalized_name.endswith("droite"):
-                    self._build_bicolumn_section(inner_frame, "bicolonne", pending_bicolumn_left, item)
+                    sections.append(self._build_bicolumn_section(inner_frame, "bicolonne", pending_bicolumn_left, item))
                     pending_bicolumn_left = None
                     continue
 
-                self._build_bicolumn_section(inner_frame, "bicolonne", item, None)
+                sections.append(self._build_bicolumn_section(inner_frame, "bicolonne", item, None))
                 continue
 
             ocr_text = self._ocr_image_text(item["path"])
-            self._build_simple_ocr_section(inner_frame, item["name"], ocr_text)
+            sections.append(self._build_simple_ocr_section(inner_frame, item["name"], ocr_text))
 
         if pending_bicolumn_left is not None:
-            self._build_bicolumn_section(inner_frame, "bicolonne", pending_bicolumn_left, None)
+            sections.append(self._build_bicolumn_section(inner_frame, "bicolonne", pending_bicolumn_left, None))
+
+        self.current_gallery_sections = sections
 
         return container
+
+    def _extract_linear_title_blocks(self, gallery_sections):
+        blocks = []
+        current_block = None
+        pending_children = []
+
+        def start_block(title_text):
+            nonlocal current_block, pending_children
+            current_block = {
+                "title": title_text,
+                "children": [],
+            }
+            if pending_children:
+                current_block["children"].extend(pending_children)
+                pending_children = []
+            blocks.append(current_block)
+
+        def append_children(children):
+            if current_block is None:
+                pending_children.extend(children)
+            else:
+                current_block["children"].extend(children)
+
+        for section in gallery_sections or []:
+            if section is None:
+                continue
+
+            kind = section.get("kind")
+            if kind == "simple":
+                self._sync_ocr_section_rows(section)
+                rows = [row for row in section.get("rows", []) if row.get("text", "").strip()]
+                section_title = section.get("title")
+
+                if section_title == "localisation":
+                    continue
+
+                if section_title == "titre" and rows:
+                    title_text = " ".join(rows[0].get("text", "").split())
+                    start_block(title_text)
+                    continue
+
+                if rows:
+                    append_children(
+                        [
+                            {
+                                "type": self._ocr_type_display(section.get("fixed_type", "taxon")),
+                                "text": "\n".join(row.get("text", "") for row in rows),
+                            }
+                        ]
+                    )
+                continue
+
+            if kind == "bicolumn":
+                children = []
+                for side in section.get("sides", []):
+                    if side is None:
+                        continue
+
+                    self._sync_ocr_section_rows(side)
+                    for row in side.get("rows", []):
+                        row_text = row.get("text", "").strip()
+                        if row_text:
+                            children.append({"type": self._ocr_type_display(row.get("type", "taxon")), "text": row_text})
+
+                if children:
+                    append_children(children)
+
+        if not blocks and pending_children:
+            blocks.append({"title": "Titre validé", "children": pending_children})
+
+        return blocks
 
     def _open_rectangles_gallery(self, exported_items):
         if self.gallery_window is not None and self.gallery_window.winfo_exists():
@@ -870,11 +1273,12 @@ class PinaxBauhinDataApp(tk.Tk):
 
         gallery_window = tk.Toplevel(self)
         self.gallery_window = gallery_window
-        gallery_window.title(f"PNG générés - page {self.current_page + 1}")
+        gallery_window.title(f"Correction OCR - page {self.current_page + 1}")
         gallery_window.geometry("1600x900")
         gallery_window.columnconfigure(0, weight=1)
         gallery_window.columnconfigure(1, weight=1)
         gallery_window.rowconfigure(0, weight=1)
+        gallery_window.rowconfigure(1, weight=0)
 
         left_panel = ttk.Frame(gallery_window, padding=12)
         left_panel.grid(row=0, column=0, sticky="nsew")
@@ -941,7 +1345,17 @@ class PinaxBauhinDataApp(tk.Tk):
         right_panel.columnconfigure(0, weight=1)
         right_panel.rowconfigure(0, weight=1)
 
+        self._refresh_validated_titles_panel()
         self._build_gallery_ocr_panel(right_panel, exported_items)
+
+        bottom_bar = ttk.Frame(gallery_window, padding=(12, 0, 12, 12))
+        bottom_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
+        bottom_bar.columnconfigure(0, weight=1)
+        ttk.Button(
+            bottom_bar,
+            text="Valider",
+            command=lambda: (self._register_validated_title(self.current_gallery_sections), gallery_window.destroy()),
+        ).grid(row=0, column=1, sticky="e")
 
     def validate_current_page_borders(self):
         exported_items = self._export_current_page_rectangles()

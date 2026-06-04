@@ -53,8 +53,8 @@ class PinaxBauhinDataApp(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Editeur de rectangles PDF")
-        self.geometry("1600x1000")
+        self.title("Caspar Bauhin - Extraction de données")
+        self.geometry("1920x1080")
 
         self.pdf_path = ""
         self.document = None
@@ -92,6 +92,7 @@ class PinaxBauhinDataApp(tk.Tk):
         self.validated_titles = []
         self.validated_italics = []
         self._validated_title_counter = 1
+        self._last_validated_border_page_index = None
 
         self.view_scale = 1.0
         self.offset_x = 0
@@ -247,6 +248,33 @@ class PinaxBauhinDataApp(tk.Tk):
     def _report_error(self, text):
         print(text)
 
+    def _page_has_title_rectangle(self, rectangles):
+        return any(rect.get("label") == "titles" for rect in rectangles or [])
+
+    def _can_validate_current_page(self):
+        current_page_number = self.current_page + 1
+
+        if self._last_validated_border_page_index is None:
+            if not self._page_has_title_rectangle(self.current_page_data):
+                message = f"Première validation impossible: aucun titre détecté sur la page {current_page_number}."
+                self._report_error(message)
+                messagebox.showerror("Validation impossible", message)
+                return False
+            return True
+
+        expected_page_number = self._last_validated_border_page_index + 2
+        if current_page_number != expected_page_number:
+            message = f"Page {current_page_number} non attendue. Validez d'abord la page {expected_page_number}."
+            self._report_error(message)
+            messagebox.showerror("Page non attendue", message)
+            return False
+
+        return True
+
+    def _commit_validated_border_page(self):
+        self._register_validated_title(self.current_gallery_sections)
+        self._last_validated_border_page_index = self.current_page
+
     def _prompt_for_pdf(self):
         pdf_path = filedialog.askopenfilename(
             title="Choisir un PDF",
@@ -268,6 +296,7 @@ class PinaxBauhinDataApp(tk.Tk):
         self.page_annotations = [None] * self.page_count
         self.page_cache = {}
         self.loading_pages = set()
+        self._last_validated_border_page_index = None
 
         self._clear_interaction_state()
         self.current_image = None
@@ -1099,15 +1128,7 @@ class PinaxBauhinDataApp(tk.Tk):
 
     def _should_show_ocr_add_button(self, section, index):
         rows = section.get("rows", [])
-        if not (0 <= index < len(rows)):
-            return False
-
-        row_type = rows[index].get("type")
-        if row_type != "taxon":
-            return True
-
-        next_row = rows[index + 1] if index + 1 < len(rows) else None
-        return next_row is None or next_row.get("type") != "taxon"
+        return 0 <= index < len(rows)
 
     def _create_action_button(self, parent, text, bg, active_bg, command):
         container = tk.Frame(parent, bg=bg, width=48, height=28, bd=0, highlightthickness=0)
@@ -1519,10 +1540,13 @@ class PinaxBauhinDataApp(tk.Tk):
         ttk.Button(
             bottom_bar,
             text="Valider",
-            command=lambda: (self._register_validated_title(self.current_gallery_sections), gallery_window.destroy()),
+            command=lambda: (self._commit_validated_border_page(), gallery_window.destroy()),
         ).grid(row=0, column=1, sticky="e")
 
     def validate_current_page_borders(self):
+        if not self._can_validate_current_page():
+            return
+
         exported_items = self._export_current_page_rectangles()
         if not exported_items:
             return

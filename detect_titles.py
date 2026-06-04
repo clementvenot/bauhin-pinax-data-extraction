@@ -158,7 +158,7 @@ count, boxes = get_cross_column_titles_from_pdf("ert.pdf")
 
 if __name__ == "__main__":
     pdf_path = "ert.pdf"
-    page_index = 350
+    page_index = 99
     render_scale = 4.17
 
     # ==== Détection ====

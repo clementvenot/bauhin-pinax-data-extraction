@@ -6,6 +6,8 @@ from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 
 from PIL import Image, ImageOps, ImageTk
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as OpenpyxlImage
 import pypdfium2 as pdfium
 
 from remove_word_fuzzy import remove_fuzzy_phrase
@@ -22,7 +24,7 @@ RECT_COLORS = {
 RECT_STROKE_WIDTH = 3
 
 RECT_LABELS_TO_DISPLAY = {
-    "titles": "titre",
+    "titles": "genre",
     "localisation": "localisation",
     "italic_text": "italique",
     "bicolumn_text": "bi-colonne",
@@ -47,6 +49,14 @@ def rect_color(label):
     return RECT_COLORS.get(label_to_internal(label), RECT_COLORS["titles"])
 def is_italic_name(normalized_name):
     return "italic" in normalized_name or "italique" in normalized_name
+
+
+def replace_first_taxon_punctuation(text):
+    text = text or ""
+    for index, character in enumerate(text):
+        if character in {".", ","}:
+            return f"{text[:index]}%{text[index + 1:]}"
+    return text
 
 
 class PinaxBauhinDataApp(tk.Tk):
@@ -161,7 +171,7 @@ class PinaxBauhinDataApp(tk.Tk):
         right_panel.rowconfigure(1, weight=1)
         right_panel.rowconfigure(3, weight=1)
 
-        ttk.Label(right_panel, text="Titres validés", font=("Helvetica", 13, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        ttk.Label(right_panel, text="Genres validés", font=("Helvetica", 13, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 8))
 
         titles_container = ttk.Frame(right_panel)
         titles_container.grid(row=1, column=0, sticky="nsew")
@@ -210,7 +220,7 @@ class PinaxBauhinDataApp(tk.Tk):
         legend_frame.grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 8))
 
         legend_items = [
-            ("titles", "titre"),
+            ("titles", "genre"),
             ("localisation", "localisation"),
             ("bicolumn_text", "bi-colonne"),
             ("italic_text", "italique"),
@@ -230,7 +240,7 @@ class PinaxBauhinDataApp(tk.Tk):
         self.label_selector = ttk.Combobox(
             bottom_bar,
             textvariable=self.new_rect_label,
-            values=["titre", "localisation", "italique", "bi-colonne"],
+            values=["genre", "localisation", "italique", "bi-colonne"],
             state="readonly",
             width=16,
         )
@@ -241,6 +251,7 @@ class PinaxBauhinDataApp(tk.Tk):
 
         self.validate_border_button_text = tk.StringVar(value="Valider bordure page 0")
         ttk.Button(bottom_bar, textvariable=self.validate_border_button_text, command=self.validate_current_page_borders).grid(row=1, column=3, sticky="e", padx=(0, 0))
+        ttk.Button(bottom_bar, text="Exporter Excel", command=self.export_validated_data_excel).grid(row=1, column=4, sticky="e", padx=(8, 0))
 
     def _set_status(self, text):
         return None
@@ -473,7 +484,7 @@ class PinaxBauhinDataApp(tk.Tk):
         self._clear_validated_titles_panel()
 
         if not self.validated_titles:
-            ttk.Label(self.validated_titles_inner, text="Aucun titre validé", foreground="#6b7280").pack(anchor="w", pady=(0, 8))
+            ttk.Label(self.validated_titles_inner, text="Aucun genre validé", foreground="#6b7280").pack(anchor="w", pady=(0, 8))
             self._update_validated_titles_scrollregion()
             return
 
@@ -584,13 +595,153 @@ class PinaxBauhinDataApp(tk.Tk):
         detail_window._photo_ref = photo
         ttk.Label(image_frame, image=photo).grid(row=0, column=0, sticky="w")
 
+    def _build_export_title_lines(self, node, lines, level=0):
+        indent = "    " * level
+        node_type = node.get("type", "taxon")
+        node_text = (node.get("text", "") or "").strip()
+
+        if node_type == "title":
+            lines.append(f"{indent}titre : {node_text}")
+        elif node_type == "taxon":
+            taxon_text, separator, reference_text = node_text.partition("%")
+            lines.append(f"{indent}taxon : {taxon_text.strip()}")
+            if separator:
+                lines.append(f"{indent}    reference : {reference_text.strip()}")
+        else:
+            lines.append(f"{indent}{node_type} : {node_text}")
+
+        for child in node.get("children", []):
+            self._build_export_title_lines(child, lines, level + 1)
+
+    def _split_taxon_reference_text(self, raw_text):
+        taxon_text, separator, reference_text = (raw_text or "").partition("%")
+        return taxon_text.strip(), reference_text.strip() if separator else ""
+
+    def _export_validated_titles_rows(self):
+        rows = []
+
+        def walk_nodes(nodes, title_text, current_variete=None):
+            for node in nodes or []:
+                node_type = node.get("type", "")
+                node_text = (node.get("text", "") or "").strip()
+
+                if node_type in {"variété", "variete"}:
+                    current_variete = node_text
+                elif node_type == "taxon":
+                    taxon_text, reference_text = self._split_taxon_reference_text(node_text)
+                    rows.append(
+                        {
+                            "taxon": taxon_text,
+                            "reference": reference_text,
+                            "variété": current_variete or "",
+                            "genre": title_text,
+                        }
+                    )
+
+                current_variete = walk_nodes(node.get("children", []), title_text, current_variete)
+
+            return current_variete
+
+        for title_group in self.validated_titles:
+            title_text = title_group.get("title", "")
+            walk_nodes(title_group.get("hierarchy", []), title_text)
+
+        return rows
+
+    def export_validated_data_excel(self):
+        if not self.validated_titles and not self.validated_italics:
+            self._report_error("Aucune donnée validée à exporter.")
+            messagebox.showerror("Export impossible", "Aucune donnée validée à exporter.")
+            return
+
+        default_name = "export_validations.xlsx"
+        if self.pdf_path:
+            default_name = f"{Path(self.pdf_path).stem}_validations.xlsx"
+
+        export_path = filedialog.asksaveasfilename(
+            title="Enregistrer l'export Excel",
+            defaultextension=".xlsx",
+            initialfile=default_name,
+            filetypes=[("Fichier Excel", "*.xlsx")],
+        )
+        if not export_path:
+            return
+
+        workbook = Workbook()
+        titles_sheet = workbook.active
+        titles_sheet.title = "Genres validés"
+        italics_sheet = workbook.create_sheet("Textes italiques")
+
+        title_headers = ["taxon", "reference", "variété", "genre"]
+        titles_sheet.append(title_headers)
+        for row in self._export_validated_titles_rows():
+            titles_sheet.append([row["taxon"], row["reference"], row["variété"], row["genre"]])
+
+        italic_headers = ["id", "image", "titre", "localisation"]
+        italics_sheet.append(italic_headers)
+        exported_italic_images = []
+        max_italic_image_width = 0
+        for index, italic_item in enumerate(self.validated_italics, start=1):
+            row_number = index + 1
+            italics_sheet.append(
+                [
+                    index,
+                    "",
+                    italic_item.get("title", ""),
+                    italic_item.get("localisation", ""),
+                ]
+            )
+
+            image_path = italic_item.get("image_path") or italic_item.get("path")
+            if image_path:
+                with Image.open(image_path) as source_image:
+                    source_width, source_height = source_image.size
+                    scaled_width = max(1, int(source_width / 10))
+                    scaled_height = max(1, int(source_height / 10))
+                    max_italic_image_width = max(max_italic_image_width, scaled_width)
+
+                excel_image = OpenpyxlImage(str(image_path))
+                excel_image.width = scaled_width
+                excel_image.height = scaled_height
+                excel_image.anchor = f"B{row_number}"
+                italics_sheet.add_image(excel_image)
+                exported_italic_images.append(excel_image)
+
+                italics_sheet.row_dimensions[row_number].height = max(18, scaled_height * 0.75)
+
+        titles_sheet.column_dimensions["A"].width = 30
+        titles_sheet.column_dimensions["B"].width = 40
+        titles_sheet.column_dimensions["C"].width = 60
+        titles_sheet.column_dimensions["D"].width = 40
+
+        italics_sheet.column_dimensions["A"].width = 8
+        italics_sheet.column_dimensions["B"].width = max(12, max_italic_image_width / 7.0)
+        italics_sheet.column_dimensions["C"].width = 32
+        italics_sheet.column_dimensions["D"].width = 45
+
+        for sheet in (titles_sheet, italics_sheet):
+            for column_cells in sheet.columns:
+                max_length = 0
+                column_letter = column_cells[0].column_letter
+                if sheet.title == "Textes italiques" and column_letter == "B":
+                    continue
+                for cell in column_cells:
+                    value = "" if cell.value is None else str(cell.value)
+                    max_length = max(max_length, max((len(line) for line in value.splitlines()), default=0))
+                sheet.column_dimensions[column_letter].width = min(max_length + 2, 80)
+                for cell in column_cells:
+                    cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
+
+        workbook.save(export_path)
+        messagebox.showinfo("Export terminé", f"Fichier Excel créé :\n{export_path}")
+
     def _format_validated_title_button(self, title_group):
-        return title_group.get('title', 'Titre')
+        return title_group.get('title', 'Genre')
 
     def _extract_title_group_name(self, exported_items):
         for item in exported_items:
             normalized_name = item["name"].lower().replace("-", "_")
-            if normalized_name.startswith("titre"):
+            if normalized_name.startswith("genre") or normalized_name.startswith("titre"):
                 _, fuzzy_title_text = self._ocr_title_text(item["path"])
                 cleaned_title = " ".join((fuzzy_title_text or item["name"]).split())
                 if cleaned_title:
@@ -619,7 +770,7 @@ class PinaxBauhinDataApp(tk.Tk):
                 pending_page_localisations.append(self._ocr_image_text(item["path"]))
                 continue
 
-            if normalized_name.startswith("titre"):
+            if normalized_name.startswith("genre") or normalized_name.startswith("titre"):
                 raw_title_text, fuzzy_title_text = self._ocr_title_text(item["path"])
                 current_title = {
                     "type": "title",
@@ -665,7 +816,7 @@ class PinaxBauhinDataApp(tk.Tk):
 
             title_text = " ".join((title_text or "").split())
             if not title_text:
-                title_text = f"Titre validé {self._validated_title_counter}"
+                title_text = f"Genre validé {self._validated_title_counter}"
 
             current_group = {
                 "id": self._validated_title_counter,
@@ -711,7 +862,7 @@ class PinaxBauhinDataApp(tk.Tk):
                     return
 
             if current_title_entry is None:
-                current_group, current_title_entry = ensure_current_group(f"Titre validé {self._validated_title_counter}")
+                current_group, current_title_entry = ensure_current_group(f"Genre validé {self._validated_title_counter}")
 
             current_title_entry.setdefault("children", []).extend(children)
             ensure_page_entry(current_group)
@@ -741,7 +892,7 @@ class PinaxBauhinDataApp(tk.Tk):
                     page_localizations.extend(row.get("text", "") for row in rows)
                     continue
 
-                if section_title == "titre" and rows:
+                if section_title in {"titre", "genre"} and rows:
                     title_text = rows[0].get("text", "")
                     current_group, current_title_entry = ensure_current_group(title_text)
                     ensure_page_entry(current_group)
@@ -782,7 +933,7 @@ class PinaxBauhinDataApp(tk.Tk):
 
     def _open_validated_title_detail(self, title_group):
         detail_window = tk.Toplevel(self)
-        detail_window.title(title_group.get("title", "Titre validé"))
+        detail_window.title(title_group.get("title", "Genre validé"))
         detail_window.geometry("1100x800")
         detail_window.columnconfigure(0, weight=1)
         detail_window.rowconfigure(0, weight=1)
@@ -792,7 +943,7 @@ class PinaxBauhinDataApp(tk.Tk):
         container.columnconfigure(0, weight=1)
         container.rowconfigure(1, weight=1)
 
-        ttk.Label(container, text=title_group.get("title", "Titre validé"), font=("Helvetica", 15, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        ttk.Label(container, text=title_group.get("title", "Genre validé"), font=("Helvetica", 15, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
 
         text = tk.Text(container, wrap="word")
         text.grid(row=1, column=0, sticky="nsew")
@@ -800,6 +951,7 @@ class PinaxBauhinDataApp(tk.Tk):
         text.tag_configure("level1", lmargin1=28, lmargin2=28)
         text.tag_configure("level2", lmargin1=56, lmargin2=56)
         text.tag_configure("level3", lmargin1=84, lmargin2=84)
+        text.tag_configure("level4", lmargin1=112, lmargin2=112)
 
         scrollbar = ttk.Scrollbar(container, orient="vertical", command=text.yview)
         scrollbar.grid(row=1, column=1, sticky="ns")
@@ -808,15 +960,16 @@ class PinaxBauhinDataApp(tk.Tk):
         def append(line, level="level0"):
             text.insert("end", f"{line}\n", level)
 
+        def append_taxon_with_reference(raw_text, level="level3"):
+            taxon_text, separator, reference_text = (raw_text or "").partition("%")
+            append(f"taxon : {taxon_text.strip()}", level=level)
+            if separator:
+                append(f"reference : {reference_text.strip()}", level="level4")
+
         preview_refs = []
 
-        pages = title_group.get("pages", [])
-        if pages:
-            page_numbers = ", ".join(str(page.get("page_number", "?")) for page in pages)
-            append(f"pages : {page_numbers}", level="level1")
-
         for title in title_group.get("hierarchy", []):
-            append(f"titre : {title.get('text', '')}", level="level0")
+            append(f"genre : {title.get('text', '')}", level="level0")
 
             for child in title.get("children", []):
                 child_type = child.get("type", "taxon")
@@ -827,7 +980,10 @@ class PinaxBauhinDataApp(tk.Tk):
                     "variete": "level2",
                     "taxon": "level3",
                 }.get(child_type, "level3")
-                append(f"{child_type} : {child.get('text', '')}", level=child_indent)
+                if child_type == "taxon":
+                    append_taxon_with_reference(child.get("text", ""), level=child_indent)
+                else:
+                    append(f"{child_type} : {child.get('text', '')}", level=child_indent)
 
             append("", level="level0")
 
@@ -1031,6 +1187,8 @@ class PinaxBauhinDataApp(tk.Tk):
             text = self._normalize_ocr_text(block.get("text", ""))
             if block.get("type") == "variete":
                 text = self._strip_first_word(text)
+            elif block.get("type", "taxon") == "taxon":
+                text = replace_first_taxon_punctuation(text)
             if not text:
                 continue
 
@@ -1046,14 +1204,38 @@ class PinaxBauhinDataApp(tk.Tk):
     def _create_text_widget(self, parent, text="", height=3):
         text_widget = tk.Text(parent, height=height, wrap="word", relief="solid", borderwidth=1)
         text_widget.insert("1.0", text)
+        text_widget.tag_configure("percent", foreground="#d62728")
+
+        def refresh_percent_highlight(event=None, widget=text_widget):
+            widget.after_idle(lambda w=widget: self._highlight_percent_in_text_widget(w))
+
+        text_widget.bind("<KeyRelease>", refresh_percent_highlight)
+        text_widget.bind("<ButtonRelease-1>", refresh_percent_highlight)
+        text_widget.bind("<<Paste>>", refresh_percent_highlight)
+        self._highlight_percent_in_text_widget(text_widget)
         return text_widget
+
+    def _highlight_percent_in_text_widget(self, text_widget):
+        if text_widget is None or not text_widget.winfo_exists():
+            return
+
+        text_widget.tag_remove("percent", "1.0", "end")
+        start_index = "1.0"
+
+        while True:
+            percent_index = text_widget.search("%", start_index, stopindex="end")
+            if not percent_index:
+                break
+
+            text_widget.tag_add("percent", percent_index, f"{percent_index}+1c")
+            start_index = f"{percent_index}+1c"
 
     def _ocr_type_display(self, ocr_type):
         return {
             "espece": "espèce",
             "variete": "variété",
             "taxon": "taxon",
-            "titre": "titre",
+            "titre": "genre",
             "localisation": "localisation",
             "entry": "taxon",
         }.get(ocr_type, ocr_type)
@@ -1066,7 +1248,7 @@ class PinaxBauhinDataApp(tk.Tk):
             "espèce": "espece",
             "variété": "variete",
             "taxon": "taxon",
-            "titre": "titre",
+            "genre": "titre",
             "localisation": "localisation",
         }.get(display_type, display_type)
 
@@ -1129,6 +1311,26 @@ class PinaxBauhinDataApp(tk.Tk):
     def _should_show_ocr_add_button(self, section, index):
         rows = section.get("rows", [])
         return 0 <= index < len(rows)
+
+    def _merge_consecutive_taxon_rows(self, rows):
+        merged_rows = []
+
+        for row in rows or []:
+            row_type = row.get("type", "taxon")
+            row_text = row.get("text", "")
+
+            if (
+                merged_rows
+                and row_type in {"espece", "variete"}
+                and merged_rows[-1].get("type") == row_type
+            ):
+                previous_text = merged_rows[-1].get("text", "")
+                merged_rows[-1]["text"] = "\n".join(text for text in (previous_text, row_text) if text).strip()
+                continue
+
+            merged_rows.append(row.copy())
+
+        return merged_rows
 
     def _create_action_button(self, parent, text, bg, active_bg, command):
         container = tk.Frame(parent, bg=bg, width=48, height=28, bd=0, highlightthickness=0)
@@ -1286,6 +1488,7 @@ class PinaxBauhinDataApp(tk.Tk):
                 }
                 for block in blocks
             ]
+            rows = self._merge_consecutive_taxon_rows(rows)
 
             section = {
                 "kind": "bicolumn",
@@ -1351,11 +1554,11 @@ class PinaxBauhinDataApp(tk.Tk):
                 sections.append(self._build_simple_ocr_section(inner_frame, "localisation", ocr_text))
                 continue
 
-            if normalized_name.startswith("titre"):
+            if normalized_name.startswith("genre") or normalized_name.startswith("titre"):
                 raw_title_text, fuzzy_title_text = self._ocr_title_text(item["path"])
-                sections.append(self._build_simple_ocr_section(inner_frame, "titre", fuzzy_title_text))
+                sections.append(self._build_simple_ocr_section(inner_frame, "genre", fuzzy_title_text))
                 if fuzzy_title_text != raw_title_text:
-                    print("Fuzzy titre:")
+                    print("Fuzzy genre:")
                     print(fuzzy_title_text)
                 continue
 
@@ -1417,7 +1620,7 @@ class PinaxBauhinDataApp(tk.Tk):
                 if section_title == "localisation":
                     continue
 
-                if section_title == "titre" and rows:
+                if section_title in {"titre", "genre"} and rows:
                     title_text = " ".join(rows[0].get("text", "").split())
                     start_block(title_text)
                     continue
@@ -1513,6 +1716,7 @@ class PinaxBauhinDataApp(tk.Tk):
                 if (
                     "bicolonne" in normalized_name
                     or "bi_colonne" in normalized_name
+                    or normalized_name.startswith("genre")
                     or normalized_name.startswith("titre")
                     or "localisation" in normalized_name
                 ):

@@ -266,7 +266,6 @@ class PinaxBauhinDataApp(tk.Tk):
             if not self._page_has_title_rectangle(self.current_page_data):
                 message = f"Première validation impossible: aucun titre détecté sur la page {current_page_number}."
                 self._report_error(message)
-                messagebox.showerror("Validation impossible", message)
                 return False
             return True
 
@@ -274,7 +273,6 @@ class PinaxBauhinDataApp(tk.Tk):
         if current_page_number != expected_page_number:
             message = f"Page {current_page_number} non attendue. Validez d'abord la page {expected_page_number}."
             self._report_error(message)
-            messagebox.showerror("Page non attendue", message)
             return False
 
         return True
@@ -648,7 +646,6 @@ class PinaxBauhinDataApp(tk.Tk):
     def export_validated_data_excel(self):
         if not self.validated_titles and not self.validated_italics:
             self._report_error("Aucune donnée validée à exporter.")
-            messagebox.showerror("Export impossible", "Aucune donnée validée à exporter.")
             return
 
         default_name = "export_validations.xlsx"
@@ -2350,6 +2347,9 @@ class PinaxBauhinDataApp(tk.Tk):
                 for index, page_rects in enumerate(self.page_annotations)
             ],
         }
+    
+    def _report_error(self, message):
+        messagebox.showerror("Erreur", message)
 
 if __name__ == "__main__":
     app = PinaxBauhinDataApp()

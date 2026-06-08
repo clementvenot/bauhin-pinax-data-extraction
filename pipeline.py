@@ -15,7 +15,7 @@ def build_title_mask(image_bgr):
         cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )[1]
 
-    cv2.imwrite("debug_title_mask.png", mask)
+    #cv2.imwrite("debug_title_mask.png", mask)
     return mask
 
 def build_block_mask(image_bgr):
@@ -56,7 +56,7 @@ def has_center_black_vertical_line(image_bgr):
     # =========================
     # Prétraitement
     # =========================
-    cv2.imwrite("debug_block_mask.png",image_bgr)
+    #cv2.imwrite("debug_block_mask.png",image_bgr)
     mask = build_bicolumn_mask(image_bgr)
 
     # =========================

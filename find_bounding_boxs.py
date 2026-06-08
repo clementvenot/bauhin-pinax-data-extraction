@@ -225,7 +225,7 @@ def main():
     for x, y, w, h in title_boxes:
         cv2.rectangle(debug, (x, y), (x + w, y + h), (255, 0, 0), 3)  # bleu
 
-    cv2.imwrite(OUT_TITLES, debug)
+    #cv2.imwrite(OUT_TITLES, debug)
 
     # Rename debug outputs according to your config names (optional convenience)
     # (The detect function outputs debug_pieces.png and debug_lines.png by default)

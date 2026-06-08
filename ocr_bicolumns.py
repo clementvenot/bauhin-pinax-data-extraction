@@ -5,15 +5,38 @@ import re
 import statistics
 import pytesseract
 from PIL import Image, ImageDraw
+import os
+import sys
+import platform
+
 
 # ==========================================================
-# CONFIG TESSERACT (macOS Homebrew)
+# CONFIG TESSERACT (multiplateforme + portable)
 # ==========================================================
-HOMEBREW_TESSERACT = "/opt/homebrew/bin/tesseract"
-if Path(HOMEBREW_TESSERACT).exists():
-    pytesseract.pytesseract.tesseract_cmd = HOMEBREW_TESSERACT
+def get_tesseract_path():
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS  # exe PyInstaller
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
 
-# configure tesseract to use the Latin language
+    if platform.system() == "Windows":
+        return os.path.join(base_path, "tesseract", "tesseract.exe")
+    elif platform.system() == "Darwin":
+        return "/opt/homebrew/bin/tesseract"
+    else:
+        return "tesseract"
+
+# chemin binaire
+pytesseract.pytesseract.tesseract_cmd = get_tesseract_path()
+
+# chemin des langues OCR
+if platform.system() == "Windows":
+    os.environ["TESSDATA_PREFIX"] = os.path.join(
+        os.path.dirname(get_tesseract_path()),
+        "tessdata"
+    )
+
+# langue OCR
 pytesseract.pytesseract.lang = "lat"
 
 REMAINING_COLOR = "red"

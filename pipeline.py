@@ -498,7 +498,7 @@ def pipeline(pdf_path, page_index=0, render_scale=4.17):
             italic_text.append(block_json)     # 🔴
 
     # debug 
-    print(f"Page {page_index} - Titres: {len(titles)}, Blocs bicolumn: {len(bicolumn_text)}, Blocs italic: {len(italic_text)}")
+    #print(f"Page {page_index} - Titres: {len(titles)}, Blocs bicolumn: {len(bicolumn_text)}, Blocs italic: {len(italic_text)}")
 
 
     # ============================================================

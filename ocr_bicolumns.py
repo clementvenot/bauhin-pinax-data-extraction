@@ -486,7 +486,7 @@ def extract_line_indentation(img):
             }
         )
     if not grouped_lines:
-        print("Aucun texte détecté")
+        #print("Aucun texte détecté")
         return
 
     page_left_margin = min(item["left"] for line in grouped_lines.values() for item in line)
@@ -639,14 +639,14 @@ def render_debug_image(img, analysis, output_path="ocr_debug.png"):
             block["debug_label"],
             fill=block["color"],
         )
-
+    """
     print(f"Indent breakpoints: {analysis['indent_breakpoints'] if analysis['indent_breakpoints'] else 'none'}")
     print(
         f"Right gap reference: {analysis['right_gap_reference']}px | spread: {analysis['right_gap_spread']}px"
-    )
+    )"""
 
     debug_img.save(output_path)
-    print(f"Image debug save dans {output_path}")
+    #print(f"Image debug save dans {output_path}")
 
 
 def analyze_image(img):

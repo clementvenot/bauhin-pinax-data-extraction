@@ -28,7 +28,7 @@ ctns = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 cnts = ctns[0] if len(ctns) == 2 else ctns[1]
 cnts = sorted(cnts, key=lambda x: cv2.boundingRect(x)[0])
 height, width = image_bgr.shape[:2]
-print(0.1 * width)
+#print(0.1 * width)
 
 for c in cnts:
     x, y, w, h = cv2.boundingRect(c)

@@ -256,9 +256,6 @@ class PinaxBauhinDataApp(tk.Tk):
     def _set_status(self, text):
         return None
 
-    def _report_error(self, text):
-        print(text)
-
     def _page_has_title_rectangle(self, rectangles):
         return any(rect.get("label") == "titles" for rect in rectangles or [])
 
@@ -1557,9 +1554,9 @@ class PinaxBauhinDataApp(tk.Tk):
             if normalized_name.startswith("genre") or normalized_name.startswith("titre"):
                 raw_title_text, fuzzy_title_text = self._ocr_title_text(item["path"])
                 sections.append(self._build_simple_ocr_section(inner_frame, "genre", fuzzy_title_text))
-                if fuzzy_title_text != raw_title_text:
+                """if fuzzy_title_text != raw_title_text:
                     print("Fuzzy genre:")
-                    print(fuzzy_title_text)
+                    print(fuzzy_title_text)"""
                 continue
 
             if "bicolonne" in normalized_name or "bi_colonne" in normalized_name:
@@ -2353,18 +2350,6 @@ class PinaxBauhinDataApp(tk.Tk):
                 for index, page_rects in enumerate(self.page_annotations)
             ],
         }
-
-    def validate_and_print_json(self):
-        payload = self._build_rectangle_payload()
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
-
-    def save_rectangles_debug(self):
-        exported_items = self._export_current_page_rectangles()
-        if not exported_items:
-            return
-
-        print("Rectangles enregistrés dans:\n" + "\n".join(str(item["path"]) for item in exported_items))
-
 
 if __name__ == "__main__":
     app = PinaxBauhinDataApp()

@@ -162,10 +162,10 @@ def main():
             output_prefix="page_01"
         )
 
-        print(f"Séparation détectée à X = {x_split}")
+        #print(f"Séparation détectée à X = {x_split}")
 
     except RuntimeError as e:
-        print("Erreur :", e)
+        #print("Erreur :", e)
         return
 
     # =========================

@@ -98,7 +98,7 @@ def _expand_removal_span(text, start, end):
     return expanded_start, expanded_end
 
 
-def find_fuzzy_references(text, min_score=0.82):
+def find_fuzzy_references(text, min_score=0.82, reference_dictionary=None):
     """Return matched reference ids followed by the remaining unmatched text.
 
     The returned format is:
@@ -112,7 +112,9 @@ def find_fuzzy_references(text, min_score=0.82):
 
     candidates = []
 
-    for ref_text, ref_value in reference.items():
+    active_reference = reference_dictionary if reference_dictionary is not None else reference
+
+    for ref_text, ref_value in active_reference.items():
         normalized_reference = _normalize_reference_text(ref_text)
         if not normalized_reference:
             continue

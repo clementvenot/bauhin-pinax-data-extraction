@@ -13,6 +13,7 @@ import pypdfium2 as pdfium
 from remove_word_fuzzy import remove_fuzzy_phrase
 from ocr_bicolumns import extract_line_indentation, delete_bars, pytesseract
 from pipeline import pipeline as detect_page_regions
+import reference_bauhin_fuzzy as reference_fuzzy
 
 RECT_COLORS = {
     "titles": "#2d7ff9",
@@ -103,6 +104,9 @@ class PinaxBauhinDataApp(tk.Tk):
         self.validated_italics = []
         self._validated_title_counter = 1
         self._last_validated_border_page_index = None
+        self.reference_dictionary = None
+        self.reference_dictionary_path = None
+        self.export_button_text = tk.StringVar(value="Importer reference")
 
         self.view_scale = 1.0
         self.offset_x = 0
@@ -251,7 +255,7 @@ class PinaxBauhinDataApp(tk.Tk):
 
         self.validate_border_button_text = tk.StringVar(value="Valider bordure page 0")
         ttk.Button(bottom_bar, textvariable=self.validate_border_button_text, command=self.validate_current_page_borders).grid(row=1, column=3, sticky="e", padx=(0, 0))
-        ttk.Button(bottom_bar, text="Exporter Excel", command=self.export_validated_data_excel).grid(row=1, column=4, sticky="e", padx=(8, 0))
+        ttk.Button(bottom_bar, textvariable=self.export_button_text, command=self.export_validated_data_excel).grid(row=1, column=4, sticky="e", padx=(8, 0))
 
     def _set_status(self, text):
         return None
@@ -643,9 +647,34 @@ class PinaxBauhinDataApp(tk.Tk):
 
         return rows
 
+    def _get_reference_dictionary_for_export(self):
+        if self.reference_dictionary is not None:
+            return self.reference_dictionary
+
+        reference_path = filedialog.askopenfilename(
+            title="Choisir le fichier des références",
+            filetypes=[("Fichier Excel", "*.xlsx"), ("Tous les fichiers", "*.*")],
+        )
+        if not reference_path:
+            return None
+
+        try:
+            self.reference_dictionary = reference_fuzzy.load_reference_from_xlsx(reference_path)
+            self.reference_dictionary_path = reference_path
+            self.export_button_text.set("Exporter Excel")
+        except Exception as exc:
+            self._report_error(f"Impossible de charger le fichier des références: {exc}")
+            return None
+
+        return self.reference_dictionary
+
     def export_validated_data_excel(self):
         if not self.validated_titles and not self.validated_italics:
             self._report_error("Aucune donnée validée à exporter.")
+            return
+
+        reference_dictionary = self._get_reference_dictionary_for_export()
+        if reference_dictionary is None:
             return
 
         default_name = "export_validations.xlsx"
@@ -669,7 +698,8 @@ class PinaxBauhinDataApp(tk.Tk):
         title_headers = ["taxon", "reference", "variété", "genre"]
         titles_sheet.append(title_headers)
         for row in self._export_validated_titles_rows():
-            titles_sheet.append([row["taxon"], row["reference"], row["variété"], row["genre"]])
+            fuzzy_reference = reference_fuzzy.find_fuzzy_references(row["reference"], reference_dictionary=reference_dictionary)
+            titles_sheet.append([row["taxon"], fuzzy_reference, row["variété"], row["genre"]])
 
         italic_headers = ["id", "image", "titre", "localisation"]
         italics_sheet.append(italic_headers)

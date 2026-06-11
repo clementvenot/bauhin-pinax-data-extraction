@@ -619,12 +619,14 @@ class PinaxBauhinDataApp(tk.Tk):
     def _export_validated_titles_rows(self):
         rows = []
 
-        def walk_nodes(nodes, title_text, current_variete=None):
+        def walk_nodes(nodes, title_text, current_espece=None, current_variete=None):
             for node in nodes or []:
                 node_type = node.get("type", "")
                 node_text = (node.get("text", "") or "").strip()
 
-                if node_type in {"variété", "variete"}:
+                if node_type in {"espèce", "espece"}:
+                    current_espece = node_text
+                elif node_type in {"variété", "variete"}:
                     current_variete = node_text
                 elif node_type == "taxon":
                     taxon_text, reference_text = self._split_taxon_reference_text(node_text)
@@ -632,14 +634,20 @@ class PinaxBauhinDataApp(tk.Tk):
                         {
                             "taxon": taxon_text,
                             "reference": reference_text,
+                            "espèce": current_espece or "",
                             "variété": current_variete or "",
                             "genre": title_text,
                         }
                     )
 
-                current_variete = walk_nodes(node.get("children", []), title_text, current_variete)
+                current_espece, current_variete = walk_nodes(
+                    node.get("children", []),
+                    title_text,
+                    current_espece,
+                    current_variete,
+                )
 
-            return current_variete
+            return current_espece, current_variete
 
         for title_group in self.validated_titles:
             title_text = title_group.get("title", "")
@@ -695,11 +703,11 @@ class PinaxBauhinDataApp(tk.Tk):
         titles_sheet.title = "Genres validés"
         italics_sheet = workbook.create_sheet("Textes italiques")
 
-        title_headers = ["taxon", "reference", "variété", "genre"]
+        title_headers = ["taxon", "reference", "espèce", "variété", "genre"]
         titles_sheet.append(title_headers)
         for row in self._export_validated_titles_rows():
             fuzzy_reference = reference_fuzzy.find_fuzzy_references(row["reference"], reference_dictionary=reference_dictionary)
-            titles_sheet.append([row["taxon"], fuzzy_reference, row["variété"], row["genre"]])
+            titles_sheet.append([row["taxon"], fuzzy_reference, row["espèce"], row["variété"], row["genre"]])
 
         italic_headers = ["id", "image", "titre", "localisation"]
         italics_sheet.append(italic_headers)

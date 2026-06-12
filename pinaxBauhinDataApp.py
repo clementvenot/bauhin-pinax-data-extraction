@@ -488,12 +488,23 @@ class PinaxBauhinDataApp(tk.Tk):
             return
 
         for title_group in self.validated_titles:
+            card = ttk.Frame(self.validated_titles_inner)
+            card.pack(fill="x", pady=(0, 6))
+            card.columnconfigure(0, weight=1)
+
             button = ttk.Button(
-                self.validated_titles_inner,
+                card,
                 text=self._format_validated_title_button(title_group),
                 command=lambda group=title_group: self._open_validated_title_detail(group),
             )
-            button.pack(fill="x", pady=(0, 6))
+            button.grid(row=0, column=0, sticky="ew")
+
+            ttk.Button(
+                card,
+                text="×",
+                width=3,
+                command=lambda group=title_group: self._delete_validated_title(group),
+            ).grid(row=0, column=1, sticky="e", padx=(6, 0))
 
         self._update_validated_titles_scrollregion()
 
@@ -526,6 +537,7 @@ class PinaxBauhinDataApp(tk.Tk):
             card = ttk.LabelFrame(self.validated_italics_inner, text=italic_item.get("title") or "Texte italique", padding=8)
             card.pack(fill="x", pady=(0, 8))
             card.columnconfigure(1, weight=1)
+            card.columnconfigure(2, weight=0)
 
             with Image.open(italic_item["image_path"]) as italic_image:
                 preview = italic_image.convert("RGB")
@@ -537,11 +549,38 @@ class PinaxBauhinDataApp(tk.Tk):
             ttk.Label(card, image=photo).grid(row=0, column=0, rowspan=3, sticky="nw", padx=(0, 10))
             ttk.Label(card, text=italic_item.get("title", "Texte italique"), font=("Helvetica", 11, "bold")).grid(row=0, column=1, sticky="w")
 
+            ttk.Button(
+                card,
+                text="×",
+                width=3,
+                command=lambda item=italic_item: self._delete_validated_italic(item),
+            ).grid(row=0, column=2, sticky="e", padx=(10, 0))
+
             localisation = italic_item.get("localisation", "")
             ttk.Label(card, text=f"Localisation : {localisation or '—'}", foreground="#4b5563").grid(row=1, column=1, sticky="w", pady=(4, 0))
             ttk.Button(card, text="Ouvrir", command=lambda item=italic_item: self._open_validated_italic_detail(item)).grid(row=2, column=1, sticky="w", pady=(8, 0))
 
         self._update_validated_italics_scrollregion()
+
+    def _delete_validated_title(self, title_group):
+        title_label = title_group.get("title", "ce genre")
+        if not messagebox.askyesno("Confirmation de suppression", f"Supprimer le genre validé \"{title_label}\" ?"):
+            return
+
+        if title_group in self.validated_titles:
+            self.validated_titles.remove(title_group)
+
+        self._refresh_validated_titles_panel()
+
+    def _delete_validated_italic(self, italic_item):
+        italic_label = italic_item.get("title") or italic_item.get("source_name") or "ce texte italique"
+        if not messagebox.askyesno("Confirmation de suppression", f"Supprimer le texte italique \"{italic_label}\" ?"):
+            return
+
+        if italic_item in self.validated_italics:
+            self.validated_italics.remove(italic_item)
+
+        self._refresh_validated_italics_panel()
 
     def _build_italic_section(self, parent, item):
         card = ttk.LabelFrame(parent, text="texte italique", padding=10)

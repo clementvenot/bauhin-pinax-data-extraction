@@ -1,5 +1,6 @@
 import json
 import queue
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -2428,6 +2429,32 @@ class PinaxBauhinDataApp(tk.Tk):
     def _report_error(self, message):
         messagebox.showerror("Erreur", message)
 
+    def _set_app_icon(self):
+        icon_path = Path(__file__).with_name("icone.ico")
+        if not icon_path.exists():
+            return
+
+        try:
+            with Image.open(icon_path) as icon_image:
+                icon_sizes = (16, 24, 32, 48, 64, 128, 256)
+                icon_images = [
+                    ImageTk.PhotoImage(
+                        icon_image.copy().resize((size, size), Image.Resampling.LANCZOS)
+                    )
+                    for size in icon_sizes
+                ]
+                self._icon_refs = icon_images
+                self.iconphoto(True, *icon_images)
+        except Exception:
+            self._icon_refs = []
+
+        if sys.platform.startswith("win"):
+            try:
+                self.iconbitmap(str(icon_path))
+            except Exception:
+                pass
+
 if __name__ == "__main__":
     app = PinaxBauhinDataApp()
+    app._set_app_icon()
     app.mainloop()

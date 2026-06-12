@@ -2,6 +2,7 @@ import json
 import queue
 import sys
 import threading
+import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
@@ -2434,23 +2435,31 @@ class PinaxBauhinDataApp(tk.Tk):
         if not icon_path.exists():
             return
 
+        self._icon_refs = []
         try:
             with Image.open(icon_path) as icon_image:
-                icon_sizes = (16, 24, 32, 48, 64, 128, 256)
-                icon_images = [
-                    ImageTk.PhotoImage(
-                        icon_image.copy().resize((size, size), Image.Resampling.LANCZOS)
+                if sys.platform.startswith("win"):
+                    temp_icon_path = Path(tempfile.gettempdir()) / "pinax_bauhin_icon.ico"
+                    icon_image.copy().save(
+                        temp_icon_path,
+                        format="ICO",
+                        sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
                     )
-                    for size in icon_sizes
-                ]
-                self._icon_refs = icon_images
-                self.iconphoto(True, *icon_images)
+                    self.iconbitmap(str(temp_icon_path))
+                else:
+                    icon_sizes = (16, 24, 32, 48, 64, 128, 256)
+                    icon_images = [
+                        ImageTk.PhotoImage(
+                            icon_image.copy().resize((size, size), Image.Resampling.LANCZOS)
+                        )
+                        for size in icon_sizes
+                    ]
+                    self._icon_refs = icon_images
+                    self.iconphoto(True, *icon_images)
         except Exception:
-            self._icon_refs = []
-
-        if sys.platform.startswith("win"):
             try:
-                self.iconbitmap(str(icon_path))
+                if sys.platform.startswith("win"):
+                    self.iconbitmap(str(icon_path))
             except Exception:
                 pass
 

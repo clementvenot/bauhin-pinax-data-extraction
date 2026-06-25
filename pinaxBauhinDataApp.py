@@ -3,6 +3,7 @@ import queue
 import sys
 import threading
 import tempfile
+import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
@@ -102,6 +103,7 @@ class PinaxBauhinDataApp(tk.Tk):
 
         self.gallery_window = None
         self.gallery_export_items = []
+        self._validation_tempdir = None
         self.validated_titles = []
         self.validated_italics = []
         self._validated_title_counter = 1
@@ -1113,12 +1115,12 @@ class PinaxBauhinDataApp(tk.Tk):
             self._report_error("Aucun rectangle à enregistrer sur cette page.")
             return []
 
-        if self.pdf_path:
-            debug_dir = Path(self.pdf_path).with_name(f"{Path(self.pdf_path).stem}_page_{self.current_page + 1}_rectangles")
-        else:
-            debug_dir = Path.cwd() / f"page_{self.current_page + 1}_rectangles"
+        if self._validation_tempdir and self._validation_tempdir.exists():
+            shutil.rmtree(self._validation_tempdir, ignore_errors=True)
 
-        debug_dir.mkdir(parents=True, exist_ok=True)
+        self._validation_tempdir = Path(
+            tempfile.mkdtemp(prefix=f"pinax_page_{self.current_page + 1}_rectangles_")
+        )
 
         saved_items = []
         image_width, image_height = self.current_image.size
@@ -1145,13 +1147,13 @@ class PinaxBauhinDataApp(tk.Tk):
 
                 if separator_x > x1:
                     left_name = self._make_export_display_name(rect_label, rect_count, "gauche")
-                    left_path = debug_dir / f"{left_name.lower().replace(' ', '_')}.png"
+                    left_path = self._validation_tempdir / f"{left_name.lower().replace(' ', '_')}.png"
                     self.current_image.crop((x1, y1, separator_x, y2)).save(left_path)
                     saved_items.append({"path": left_path, "name": left_name})
 
                 if x2 > separator_x:
                     right_name = self._make_export_display_name(rect_label, rect_count, "droite")
-                    right_path = debug_dir / f"{right_name.lower().replace(' ', '_')}.png"
+                    right_path = self._validation_tempdir / f"{right_name.lower().replace(' ', '_')}.png"
                     self.current_image.crop((separator_x, y1, x2, y2)).save(right_path)
                     saved_items.append({"path": right_path, "name": right_name})
                 continue
@@ -1159,7 +1161,7 @@ class PinaxBauhinDataApp(tk.Tk):
             label_counts[rect_label] = label_counts.get(rect_label, 0) + 1
             rect_count = label_counts[rect_label]
             display_name = self._make_export_display_name(rect_label, rect_count)
-            export_path = debug_dir / f"{display_name.lower().replace(' ', '_')}.png"
+            export_path = self._validation_tempdir / f"{display_name.lower().replace(' ', '_')}.png"
             self.current_image.crop((x1, y1, x2, y2)).save(export_path)
             saved_items.append({"path": export_path, "name": display_name})
 

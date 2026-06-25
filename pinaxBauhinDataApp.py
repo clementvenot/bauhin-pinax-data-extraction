@@ -1824,7 +1824,7 @@ class PinaxBauhinDataApp(tk.Tk):
         if not self._can_validate_current_page():
             return
 
-        #exported_items = self._export_current_page_rectangles()
+        exported_items = self._export_current_page_rectangles()
         if not exported_items:
             return
 
